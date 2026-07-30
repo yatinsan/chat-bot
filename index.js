@@ -1,6 +1,8 @@
 import TelegramBot from 'node-telegram-bot-api';
 import { Ollama } from 'ollama';
 import dotenv from 'dotenv';
+import express from 'express';
+import { initDB, upsertLead, getEnquiries, saveMessage, getChatHistory } from './database.js';
 
 // Load environment variables
 dotenv.config();
@@ -41,7 +43,36 @@ CRITICAL RULES:
 4. CHECKING WEBSITES: If a user asks about a website, FIRST call 'sendMessages' with an array containing a single message like ["Let me check that website for you..."], then call the 'fetchWebsiteContent' tool to read the website, and finally use 'sendMessages' again with the result.
 5. NEVER repeat the same information in consecutive messages. 
 6. INTERNAL THOUGHTS: You can use regular text to write your internal thoughts or reasoning, but the user will ONLY see what you send via the 'sendMessages' tool.
+7. ITERATIVE TRACKING: Analyze every user message. If they mention useful details (e.g. looking for a mobile app, budget constraints, their name, etc), IMMEDIATELY call the 'updateLeadProfile' tool to save those insights. Don't wait until the end of the chat.
+8. MEETING SCHEDULING: If the client seems like a real, qualified lead, you MUST say: "We can schedule a meeting with our tech team. What time do you prefer?" via the 'sendMessages' tool. When they reply with a time, respond: "Let me discuss that time with our team and get back to you.", and call 'updateLeadProfile' to save the meeting_time.
 `;
+
+const app = express();
+app.use(express.static('public'));
+
+app.get('/api/enquiries', async (req, res) => {
+  try {
+    const enquiries = await getEnquiries();
+    res.json(enquiries);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/messages/:chatId', async (req, res) => {
+  try {
+    const messages = await getChatHistory(req.params.chatId);
+    res.json(messages);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, async () => {
+  await initDB();
+  console.log(`🌐 Web Dashboard running at http://localhost:${PORT}`);
+});
 
 const chatHistories = {};
 const MAX_HISTORY_LENGTH = 20;
@@ -83,6 +114,24 @@ const AI_TOOLS = [
           }
         },
         required: ['url']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'updateLeadProfile',
+      description: 'Continuously updates a client profile with new insights, contact details, or meeting time. Use this whenever the user reveals new info.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Name of the client if known' },
+          contact: { type: 'string', description: 'Contact details (email/phone) if known' },
+          insights: { type: 'string', description: 'A short, useful note/insight from the latest message (e.g., "Wants a mobile app", "Budget customer")' },
+          service: { type: 'string', description: 'The service they want (e.g. Web Development)' },
+          meeting_time: { type: 'string', description: 'The time they prefer for a meeting with the tech team' }
+        },
+        required: []
       }
     }
   }
@@ -127,11 +176,20 @@ bot.on('message', async (msg) => {
   // Initialize history
   if (!chatHistories[chatId]) {
     chatHistories[chatId] = [{ role: 'system', content: SYSTEM_PROMPT }];
+    
+    try {
+      const pastMessages = await getChatHistory(chatId);
+      for (const m of pastMessages) {
+        chatHistories[chatId].push({ role: m.role, content: m.content });
+      }
+    } catch (e) {
+      console.error('Error loading chat history:', e.message);
+    }
   }
 
   // Add user message
   chatHistories[chatId].push({ role: 'user', content: userMessage });
-
+  await saveMessage(chatId, 'user', userMessage);
   bot.sendChatAction(chatId, 'typing');
   const typingInterval = setInterval(() => {
     bot.sendChatAction(chatId, 'typing').catch(() => { });
@@ -143,6 +201,7 @@ bot.on('message', async (msg) => {
     // Tool calling loop
     while (response.message.tool_calls && response.message.tool_calls.length > 0) {
       chatHistories[chatId].push(response.message); // Append the assistant's tool call message
+      let shouldBreak = false;
 
       for (const toolCall of response.message.tool_calls) {
         const fn = toolCall.function;
@@ -155,10 +214,12 @@ bot.on('message', async (msg) => {
           const msgs = fn.arguments.messages || [];
           for (const msgText of msgs) {
             await bot.sendMessage(chatId, msgText);
+            await saveMessage(chatId, 'assistant', msgText);
             // Add a 1 sec artificial delay for natural chat feel
             await new Promise(r => setTimeout(r, 1000));
           }
           toolResultText = JSON.stringify({ status: 'Messages sent successfully.' });
+          shouldBreak = true; // Stop loop after sending message to user
         } else if (fn.name === 'fetchWebsiteContent') {
           try {
             console.log(`\n[Tool] Fetching website: ${fn.arguments.url}`);
@@ -166,6 +227,15 @@ bot.on('message', async (msg) => {
             const text = await res.text();
             // Extract some text to avoid huge responses
             toolResultText = JSON.stringify({ content: text.substring(0, 1500) });
+          } catch (e) {
+            toolResultText = JSON.stringify({ error: e.message });
+          }
+        } else if (fn.name === 'updateLeadProfile') {
+          try {
+            const data = fn.arguments;
+            await upsertLead(chatId, data);
+            toolResultText = JSON.stringify({ status: 'Lead profile updated successfully.' });
+            console.log(`\n[Database] Updated lead profile for chat ${chatId}`);
           } catch (e) {
             toolResultText = JSON.stringify({ error: e.message });
           }
@@ -179,6 +249,10 @@ bot.on('message', async (msg) => {
           content: toolResultText,
           name: fn.name
         });
+      }
+
+      if (shouldBreak) {
+        break;
       }
 
       // Request next AI response after tools have executed
