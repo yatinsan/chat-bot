@@ -2,7 +2,7 @@ import TelegramBot from 'node-telegram-bot-api';
 import { Ollama } from 'ollama';
 import dotenv from 'dotenv';
 import express from 'express';
-import { initDB, upsertLead, getEnquiries, saveMessage, getChatHistory } from './database.js';
+import { initDB, upsertLead, getEnquiries, saveMessage, getChatHistory, getLead } from './database.js';
 
 // Load environment variables
 dotenv.config();
@@ -41,10 +41,10 @@ CRITICAL RULES:
    - Message 2: A professional introduction (e.g., "Welcome to Pixbit Solutions! We're Dubai's premier experts in Web & Mobile App Development, SEO, and Digital Marketing. How can we help propel your business forward today?")
 3. KEEP IT BRIEF: Keep each individual message concise and punchy (1 to 2 sentences maximum) so it feels like a natural chat, but ensure you sound welcoming and professional.
 4. CHECKING WEBSITES: If a user asks about a website, FIRST call 'sendMessages' with an array containing a single message like ["Let me check that website for you..."], then call the 'fetchWebsiteContent' tool to read the website, and finally use 'sendMessages' again with the result.
-5. NEVER repeat the same information in consecutive messages. 
+5. NEVER repeat the same information in consecutive messages.
 6. INTERNAL THOUGHTS: You can use regular text to write your internal thoughts or reasoning, but the user will ONLY see what you send via the 'sendMessages' tool.
-7. ITERATIVE TRACKING: Analyze every user message. If they mention useful details (e.g. looking for a mobile app, budget constraints, their name, etc), IMMEDIATELY call the 'updateLeadProfile' tool to save those insights. Don't wait until the end of the chat.
-8. MEETING SCHEDULING: If the client seems like a real, qualified lead, you MUST say: "We can schedule a meeting with our tech team. What time do you prefer?" via the 'sendMessages' tool. When they reply with a time, respond: "Let me discuss that time with our team and get back to you.", and call 'updateLeadProfile' to save the meeting_time.
+7. ITERATIVE TRACKING: Analyze every user message. If they mention useful details, IMMEDIATELY call the 'updateClientContext' tool to save those insights. Don't wait until the end of the chat.
+8. MEETING SCHEDULING: If the client seems like a real, qualified lead, you MUST say: "We can schedule a meeting with our tech team. What time do you prefer?" via the 'sendMessages' tool. When they reply with a time, respond: "Let me discuss that time with our team and get back to you.", and call 'updateClientContext' to save the meeting_time.
 `;
 
 const app = express();
@@ -120,8 +120,8 @@ const AI_TOOLS = [
   {
     type: 'function',
     function: {
-      name: 'updateLeadProfile',
-      description: 'Continuously updates a client profile with new insights, contact details, or meeting time. Use this whenever the user reveals new info.',
+      name: 'updateClientContext',
+      description: 'Continuously updates a client profile with new insights, contact details, or meeting time. Use this to remember important details.',
       parameters: {
         type: 'object',
         properties: {
@@ -137,14 +137,22 @@ const AI_TOOLS = [
   }
 ];
 
+const activeRequests = {};
+
 /**
  * Streams the Ollama chat response to the console and collects tool calls
  */
-async function streamOllamaChat(messages) {
+async function streamOllamaChat(chatId, messages) {
   process.stdout.write('\n[AI is thinking/responding...] ');
+  
+  const messagesToSend = [
+    messages[0], 
+    ...messages.slice(-MAX_HISTORY_LENGTH)
+  ];
+
   const stream = await ollama.chat({
     model: ollamaModel,
-    messages: messages,
+    messages: messagesToSend,
     tools: AI_TOOLS,
     stream: true,
   });
@@ -152,6 +160,9 @@ async function streamOllamaChat(messages) {
   let fullResponse = { message: { role: 'assistant', content: '', tool_calls: [] } };
 
   for await (const chunk of stream) {
+    if (activeRequests[chatId]?.aborted) {
+      throw new Error('ABORTED');
+    }
     if (chunk.message.content) {
       process.stdout.write(chunk.message.content);
       fullResponse.message.content += chunk.message.content;
@@ -173,6 +184,12 @@ bot.on('message', async (msg) => {
 
   if (!userMessage) return;
 
+  if (activeRequests[chatId]) {
+    activeRequests[chatId].aborted = true;
+    console.log(`\n[System] Aborted AI response for chat ${chatId} due to new incoming message.`);
+  }
+  activeRequests[chatId] = { aborted: false };
+
   // Initialize history
   if (!chatHistories[chatId]) {
     chatHistories[chatId] = [{ role: 'system', content: SYSTEM_PROMPT }];
@@ -187,6 +204,13 @@ bot.on('message', async (msg) => {
     }
   }
 
+  // Update dynamic context in system prompt
+  try {
+    const lead = await getLead(chatId);
+    const contextStr = lead && lead.insights ? lead.insights : 'No context yet.';
+    chatHistories[chatId][0].content = SYSTEM_PROMPT + `\n\nCLIENT CONTEXT SUMMARY (Always refer to this):\n${contextStr}`;
+  } catch(e) {}
+
   // Add user message
   chatHistories[chatId].push({ role: 'user', content: userMessage });
   await saveMessage(chatId, 'user', userMessage);
@@ -196,7 +220,7 @@ bot.on('message', async (msg) => {
   }, 4000);
 
   try {
-    let response = await streamOllamaChat(chatHistories[chatId]);
+    let response = await streamOllamaChat(chatId, chatHistories[chatId]);
 
     // Tool calling loop
     while (response.message.tool_calls && response.message.tool_calls.length > 0) {
@@ -230,12 +254,12 @@ bot.on('message', async (msg) => {
           } catch (e) {
             toolResultText = JSON.stringify({ error: e.message });
           }
-        } else if (fn.name === 'updateLeadProfile') {
+        } else if (fn.name === 'updateClientContext') {
           try {
             const data = fn.arguments;
             await upsertLead(chatId, data);
-            toolResultText = JSON.stringify({ status: 'Lead profile updated successfully.' });
-            console.log(`\n[Database] Updated lead profile for chat ${chatId}`);
+            toolResultText = JSON.stringify({ status: 'Context updated successfully.' });
+            console.log(`\n[Database] Updated client context for chat ${chatId}`);
           } catch (e) {
             toolResultText = JSON.stringify({ error: e.message });
           }
@@ -256,25 +280,18 @@ bot.on('message', async (msg) => {
       }
 
       // Request next AI response after tools have executed
-      response = await streamOllamaChat(chatHistories[chatId]);
+      response = await streamOllamaChat(chatId, chatHistories[chatId]);
     }
 
     // Process final text response
-    // We only push it to history for internal context. We DO NOT send it to the user.
-    // The user ONLY receives messages via the 'sendMessage' tool.
     if (response.message.content) {
       chatHistories[chatId].push({ role: 'assistant', content: response.message.content });
     }
 
-    // Truncate history if needed (keep system prompt)
-    if (chatHistories[chatId].length > MAX_HISTORY_LENGTH + 1) {
-      chatHistories[chatId] = [
-        chatHistories[chatId][0],
-        ...chatHistories[chatId].slice(-MAX_HISTORY_LENGTH)
-      ];
-    }
-
   } catch (error) {
+    if (error.message === 'ABORTED') {
+      return; // Silently exit, the new incoming message is handling it
+    }
     console.error('Error during AI processing:', error.message);
     bot.sendMessage(chatId, 'Sorry, I encountered an internal error processing your request.');
   } finally {

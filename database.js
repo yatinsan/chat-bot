@@ -74,6 +74,11 @@ export async function getEnquiries() {
   return await db.all('SELECT * FROM leads ORDER BY updated_at DESC');
 }
 
+export async function getLead(chatId) {
+  if (!db) await initDB();
+  return await db.get('SELECT * FROM leads WHERE chat_id = ?', [chatId.toString()]);
+}
+
 export async function saveMessage(chatId, role, content) {
   if (!db) await initDB();
   await db.run(
