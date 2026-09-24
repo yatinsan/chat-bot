@@ -81,13 +81,52 @@ export async function getLead(chatId) {
 
 export async function saveMessage(chatId, role, content) {
   if (!db) await initDB();
-  await db.run(
+  const result = await db.run(
     'INSERT INTO messages (chat_id, role, content) VALUES (?, ?, ?)',
     [chatId.toString(), role, content]
   );
+  return db.get('SELECT * FROM messages WHERE id = ?', [result.lastID]);
 }
 
 export async function getChatHistory(chatId) {
   if (!db) await initDB();
-  return await db.all('SELECT * FROM messages WHERE chat_id = ? ORDER BY created_at ASC', [chatId.toString()]);
+  return db.all(
+    'SELECT * FROM messages WHERE chat_id = ? ORDER BY id ASC',
+    [chatId.toString()]
+  );
+}
+
+export async function listChats() {
+  if (!db) await initDB();
+  return db.all(`
+    SELECT
+      chats.chat_id,
+      l.name,
+      l.contact,
+      l.service,
+      l.meeting_time,
+      chats.message_count,
+      last.content AS last_message,
+      last.role AS last_role,
+      last.created_at AS last_at
+    FROM (
+      SELECT chat_id, COUNT(*) AS message_count, MAX(id) AS last_id
+      FROM messages
+      GROUP BY chat_id
+    ) chats
+    JOIN messages last ON last.id = chats.last_id
+    LEFT JOIN leads l ON l.chat_id = chats.chat_id
+    ORDER BY chats.last_id DESC
+  `);
+}
+
+export async function getStats() {
+  if (!db) await initDB();
+  return db.get(`
+    SELECT
+      (SELECT COUNT(*) FROM leads) AS leads,
+      (SELECT COUNT(*) FROM messages) AS messages,
+      (SELECT COUNT(DISTINCT chat_id) FROM messages) AS chats,
+      (SELECT COUNT(*) FROM leads WHERE meeting_time IS NOT NULL AND TRIM(meeting_time) != '') AS meetings
+  `);
 }

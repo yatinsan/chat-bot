@@ -1,8 +1,11 @@
+import { createServer } from 'http';
+import { randomUUID } from 'crypto';
+import { WebSocketServer, WebSocket } from 'ws';
 import TelegramBot from 'node-telegram-bot-api';
 import { Ollama } from 'ollama';
 import dotenv from 'dotenv';
 import express from 'express';
-import { initDB, upsertLead, getEnquiries, saveMessage, getChatHistory, getLead } from './database.js';
+import { initDB, upsertLead, getEnquiries, saveMessage, getChatHistory, getLead, listChats, getStats } from './database.js';
 
 // Load environment variables
 dotenv.config();
@@ -11,12 +14,10 @@ const token = process.env.TELEGRAM_BOT_TOKEN;
 const ollamaModel = process.env.OLLAMA_MODEL || 'gemma4:12b';
 
 if (!token) {
-  console.error('TELEGRAM_BOT_TOKEN is not set in the .env file');
-  process.exit(1);
+  console.warn('TELEGRAM_BOT_TOKEN is not set. Website chat still works; Telegram replies are disabled.');
 }
 
-// Initialize Telegram Bot (polling mode)
-const bot = new TelegramBot(token, { polling: true });
+const bot = token ? new TelegramBot(token, { polling: true }) : null;
 
 // Initialize Ollama client
 const ollama = new Ollama();
@@ -68,11 +69,36 @@ app.get('/api/messages/:chatId', async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, async () => {
-  await initDB();
-  console.log(`🌐 Web Dashboard running at http://localhost:${PORT}`);
+app.get('/api/chats', async (req, res) => {
+  try {
+    res.json(await listChats());
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
+
+app.get('/api/stats', async (req, res) => {
+  try {
+    res.json(await getStats());
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+const PORT = process.env.PORT || 3000;
+const server = createServer(app);
+const wss = new WebSocketServer({ server, path: '/ws' });
+
+function broadcast(event) {
+  const data = JSON.stringify(event);
+  for (const client of wss.clients) {
+    if (client.readyState === WebSocket.OPEN) client.send(data);
+  }
+}
+
+function sendTo(socket, event) {
+  if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(event));
+}
 
 const chatHistories = {};
 const MAX_HISTORY_LENGTH = 20;
@@ -86,7 +112,7 @@ const AI_TOOLS = [
     type: 'function',
     function: {
       name: 'sendMessages',
-      description: 'Sends one or more text messages to the Telegram user. ALWAYS pass an array of messages to send them sequentially with a delay.',
+      description: 'Sends one or more text messages to the user (Telegram or the website chat). ALWAYS pass an array of messages to send them sequentially.',
       parameters: {
         type: 'object',
         properties: {
@@ -142,7 +168,7 @@ const activeRequests = {};
 /**
  * Streams the Ollama chat response to the console and collects tool calls
  */
-async function streamOllamaChat(chatId, messages) {
+async function streamOllamaChat(chatId, messages, request) {
   process.stdout.write('\n[AI is thinking/responding...] ');
   
   const messagesToSend = [
@@ -160,7 +186,7 @@ async function streamOllamaChat(chatId, messages) {
   let fullResponse = { message: { role: 'assistant', content: '', tool_calls: [] } };
 
   for await (const chunk of stream) {
-    if (activeRequests[chatId]?.aborted) {
+    if (request?.aborted) {
       throw new Error('ABORTED');
     }
     if (chunk.message.content) {
@@ -177,54 +203,65 @@ async function streamOllamaChat(chatId, messages) {
   return fullResponse;
 }
 
-// Handle incoming messages
-bot.on('message', async (msg) => {
-  const chatId = msg.chat.id;
-  const userMessage = msg.text ? msg.text.trim() : '';
+async function deliverAssistantMessage(chatId, text, channel) {
+  const saved = await saveMessage(chatId, 'assistant', text);
+  broadcast({ type: 'message', message: saved });
+  if (channel === 'telegram') {
+    if (!bot) throw new Error('Telegram bot is not configured');
+    await bot.sendMessage(chatId, text);
+  }
+  return saved;
+}
 
-  if (!userMessage) return;
+async function handleUserMessage(chatId, userMessage, channel) {
+  chatId = chatId.toString();
 
   if (activeRequests[chatId]) {
     activeRequests[chatId].aborted = true;
     console.log(`\n[System] Aborted AI response for chat ${chatId} due to new incoming message.`);
   }
-  activeRequests[chatId] = { aborted: false };
+  const request = { aborted: false };
+  activeRequests[chatId] = request;
 
-  // Initialize history
   if (!chatHistories[chatId]) {
     chatHistories[chatId] = [{ role: 'system', content: SYSTEM_PROMPT }];
-    
     try {
       const pastMessages = await getChatHistory(chatId);
-      for (const m of pastMessages) {
-        chatHistories[chatId].push({ role: m.role, content: m.content });
+      for (const message of pastMessages) {
+        chatHistories[chatId].push({ role: message.role, content: message.content });
       }
-    } catch (e) {
-      console.error('Error loading chat history:', e.message);
+    } catch (error) {
+      console.error('Error loading chat history:', error.message);
     }
   }
 
-  // Update dynamic context in system prompt
   try {
     const lead = await getLead(chatId);
     const contextStr = lead && lead.insights ? lead.insights : 'No context yet.';
-    chatHistories[chatId][0].content = SYSTEM_PROMPT + `\n\nCLIENT CONTEXT SUMMARY (Always refer to this):\n${contextStr}`;
-  } catch(e) {}
+    chatHistories[chatId][0].content = `${SYSTEM_PROMPT}\n\nCLIENT CONTEXT SUMMARY (Always refer to this):\n${contextStr}`;
+  } catch {
+    // Context is optional; the reply can still proceed.
+  }
 
-  // Add user message
   chatHistories[chatId].push({ role: 'user', content: userMessage });
-  await saveMessage(chatId, 'user', userMessage);
-  bot.sendChatAction(chatId, 'typing');
-  const typingInterval = setInterval(() => {
-    bot.sendChatAction(chatId, 'typing').catch(() => { });
-  }, 4000);
+  const savedUser = await saveMessage(chatId, 'user', userMessage);
+  broadcast({ type: 'message', message: savedUser });
+
+  broadcast({ type: 'typing', chatId, active: true });
+  let typingInterval;
+  if (channel === 'telegram' && bot) {
+    bot.sendChatAction(chatId, 'typing').catch(() => {});
+    typingInterval = setInterval(() => {
+      bot.sendChatAction(chatId, 'typing').catch(() => {});
+    }, 4000);
+  }
 
   try {
-    let response = await streamOllamaChat(chatId, chatHistories[chatId]);
+    let response = await streamOllamaChat(chatId, chatHistories[chatId], request);
 
-    // Tool calling loop
     while (response.message.tool_calls && response.message.tool_calls.length > 0) {
-      chatHistories[chatId].push(response.message); // Append the assistant's tool call message
+      if (request.aborted) throw new Error('ABORTED');
+      chatHistories[chatId].push(response.message);
       let shouldBreak = false;
 
       for (const toolCall of response.message.tool_calls) {
@@ -234,40 +271,37 @@ bot.on('message', async (msg) => {
         let toolResultText = '';
 
         if (fn.name === 'sendMessages') {
-          // AI wants to send intermediate messages
           const msgs = fn.arguments.messages || [];
           for (const msgText of msgs) {
-            await bot.sendMessage(chatId, msgText);
-            await saveMessage(chatId, 'assistant', msgText);
-            // Add a 1 sec artificial delay for natural chat feel
-            await new Promise(r => setTimeout(r, 1000));
+            if (request.aborted) throw new Error('ABORTED');
+            await deliverAssistantMessage(chatId, msgText, channel);
+            await new Promise((resolve) => setTimeout(resolve, 600));
           }
           toolResultText = JSON.stringify({ status: 'Messages sent successfully.' });
-          shouldBreak = true; // Stop loop after sending message to user
+          shouldBreak = true;
         } else if (fn.name === 'fetchWebsiteContent') {
           try {
             console.log(`\n[Tool] Fetching website: ${fn.arguments.url}`);
             const res = await fetch(fn.arguments.url);
             const text = await res.text();
-            // Extract some text to avoid huge responses
             toolResultText = JSON.stringify({ content: text.substring(0, 1500) });
-          } catch (e) {
-            toolResultText = JSON.stringify({ error: e.message });
+          } catch (error) {
+            toolResultText = JSON.stringify({ error: error.message });
           }
         } else if (fn.name === 'updateClientContext') {
           try {
-            const data = fn.arguments;
-            await upsertLead(chatId, data);
+            await upsertLead(chatId, fn.arguments);
+            const lead = await getLead(chatId);
+            if (lead) broadcast({ type: 'lead', lead });
             toolResultText = JSON.stringify({ status: 'Context updated successfully.' });
             console.log(`\n[Database] Updated client context for chat ${chatId}`);
-          } catch (e) {
-            toolResultText = JSON.stringify({ error: e.message });
+          } catch (error) {
+            toolResultText = JSON.stringify({ error: error.message });
           }
         } else {
           toolResultText = JSON.stringify({ error: `Unknown tool: ${fn.name}` });
         }
 
-        // Append tool result back to history
         chatHistories[chatId].push({
           role: 'tool',
           content: toolResultText,
@@ -275,32 +309,80 @@ bot.on('message', async (msg) => {
         });
       }
 
-      if (shouldBreak) {
-        break;
-      }
-
-      // Request next AI response after tools have executed
-      response = await streamOllamaChat(chatId, chatHistories[chatId]);
+      if (shouldBreak) break;
+      response = await streamOllamaChat(chatId, chatHistories[chatId], request);
     }
 
-    // Process final text response
     if (response.message.content) {
       chatHistories[chatId].push({ role: 'assistant', content: response.message.content });
     }
-
   } catch (error) {
-    if (error.message === 'ABORTED') {
-      return; // Silently exit, the new incoming message is handling it
-    }
+    if (error.message === 'ABORTED') return;
     console.error('Error during AI processing:', error.message);
-    bot.sendMessage(chatId, 'Sorry, I encountered an internal error processing your request.');
+    try {
+      await deliverAssistantMessage(
+        chatId,
+        'Sorry, I encountered an internal error processing your request.',
+        channel
+      );
+    } catch (sendError) {
+      console.error('Failed to send error message:', sendError.message);
+    }
   } finally {
-    clearInterval(typingInterval);
+    if (typingInterval) clearInterval(typingInterval);
+    if (activeRequests[chatId] === request) {
+      broadcast({ type: 'typing', chatId, active: false });
+    }
   }
+}
+
+wss.on('connection', (socket) => {
+  sendTo(socket, { type: 'connected' });
+
+  socket.on('message', async (raw) => {
+    let data;
+    try {
+      data = JSON.parse(raw.toString());
+    } catch {
+      return;
+    }
+    if (data.type !== 'send') return;
+
+    const content = String(data.content || '').trim();
+    if (!content) return;
+
+    const chatId = data.chatId ? String(data.chatId) : `web-${randomUUID()}`;
+    const channel = chatId.startsWith('web-') ? 'web' : 'telegram';
+
+    if (channel === 'telegram' && !bot) {
+      sendTo(socket, { type: 'error', message: 'Telegram is not connected on this server.' });
+      return;
+    }
+
+    if (!data.chatId) sendTo(socket, { type: 'chat_created', chatId });
+
+    try {
+      await handleUserMessage(chatId, content, channel);
+    } catch (error) {
+      sendTo(socket, { type: 'error', message: error.message });
+    }
+  });
 });
 
-bot.on('polling_error', (error) => {
-  console.error('Polling Error:', error.code, error.message);
-});
+if (bot) {
+  bot.on('message', async (msg) => {
+    const userMessage = msg.text ? msg.text.trim() : '';
+    if (!userMessage) return;
+    await handleUserMessage(msg.chat.id, userMessage, 'telegram');
+  });
 
-console.log('✅ Bot is running. Send a message to your bot on Telegram!');
+  bot.on('polling_error', (error) => {
+    console.error('Polling Error:', error.code, error.message);
+  });
+  console.log('✅ Telegram bot is running.');
+}
+
+await initDB();
+server.listen(PORT, () => {
+  console.log(`🌐 Dashboard running at http://localhost:${PORT}`);
+});
