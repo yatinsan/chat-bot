@@ -25,7 +25,7 @@ export default function Overview({ subscribe, onOpenChat }) {
   }, [load]);
 
   useEffect(() => subscribe((event) => {
-    if (event.type === 'message' || event.type === 'lead') load();
+    if (event.type === 'message' || event.type === 'lead' || event.type === 'lead_deleted') load();
   }), [subscribe, load]);
 
   const cards = [

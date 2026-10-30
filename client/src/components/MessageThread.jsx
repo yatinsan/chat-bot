@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { formatTime } from '../lib/format.js';
 
-export default function MessageThread({ messages, typing }) {
+export default function MessageThread({ messages, typing, emptyText = 'No messages in this conversation yet.' }) {
   const endRef = useRef(null);
 
   useEffect(() => {
@@ -11,7 +11,7 @@ export default function MessageThread({ messages, typing }) {
   if (messages.length === 0 && !typing) {
     return (
       <div className="thread empty-thread">
-        <p>No messages in this conversation yet.</p>
+        <p>{emptyText}</p>
       </div>
     );
   }

@@ -1,4 +1,4 @@
-import { chatLabel, channelOf, formatDateTime } from '../lib/format.js';
+import { chatLabel, channelOf, formatDateTime, scoreBand } from '../lib/format.js';
 
 export default function ConversationList({ chats, selectedId, onSelect, query, onQuery, action, loading }) {
   const needle = query.trim().toLowerCase();
@@ -41,6 +41,9 @@ export default function ConversationList({ chats, selectedId, onSelect, query, o
             <p>{chat.last_message || 'No messages yet'}</p>
             <div className="conv-meta">
               <span className="tag">{channelOf(chat.chat_id)}</span>
+              {Number(chat.lead_score) > 0 && (
+                <span className={`score ${scoreBand(chat.lead_score)}`}>{chat.lead_score}/10</span>
+              )}
               <span>{chat.message_count} messages</span>
             </div>
           </button>

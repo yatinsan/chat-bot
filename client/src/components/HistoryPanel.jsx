@@ -49,7 +49,11 @@ export default function HistoryPanel({ subscribe, onOpenChat }) {
   }, [selectedId]);
 
   useEffect(() => subscribe((event) => {
-    if (event.type === 'message' || event.type === 'lead') loadChats();
+    if (event.type === 'lead_deleted' && String(event.chatId) === String(selectedId)) {
+      setSelectedId(null);
+      setMessages([]);
+    }
+    if (event.type === 'message' || event.type === 'lead' || event.type === 'lead_deleted') loadChats();
     if (event.type === 'message' && String(event.message.chat_id) === String(selectedId)) {
       setMessages((prev) => (
         prev.some((message) => message.id === event.message.id) ? prev : [...prev, event.message]

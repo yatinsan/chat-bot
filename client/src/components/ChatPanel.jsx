@@ -82,6 +82,13 @@ export default function ChatPanel({ subscribe, send, status, initialChatId }) {
       setTyping(Boolean(event.active));
     }
     if (event.type === 'lead') loadChats();
+    if (event.type === 'lead_deleted') {
+      loadChats();
+      if (String(event.chatId) === String(selectedRef.current)) {
+        selectChat(null);
+        setMessages([]);
+      }
+    }
     if (event.type === 'error') setError(event.message);
     if (event.type === 'chat_created') selectChat(event.chatId);
   }), [subscribe, loadChats]);

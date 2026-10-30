@@ -4,9 +4,11 @@ import Overview from './components/Overview.jsx';
 import ChatPanel from './components/ChatPanel.jsx';
 import HistoryPanel from './components/HistoryPanel.jsx';
 import LeadsPanel from './components/LeadsPanel.jsx';
+import InboxPanel from './components/InboxPanel.jsx';
 import { useWebSocket } from './hooks/useWebSocket.js';
 
 const TITLES = {
+  inbox: ['Inbox', 'Each chat, what they need, and who to contact'],
   overview: ['Overview', 'Leads, conversations, and live activity'],
   chat: ['Live Chat', 'Talk to the assistant and reply to Telegram threads'],
   history: ['Chat History', 'Every saved website and Telegram conversation'],
@@ -15,7 +17,7 @@ const TITLES = {
 
 export default function App() {
   const listeners = useRef(new Set());
-  const [section, setSection] = useState('overview');
+  const [section, setSection] = useState('inbox');
   const [focusChatId, setFocusChatId] = useState(null);
 
   const subscribe = useCallback((listener) => {
@@ -49,6 +51,7 @@ export default function App() {
           </div>
         </header>
         <main className="content">
+          {section === 'inbox' && <InboxPanel subscribe={subscribe} />}
           {section === 'overview' && <Overview subscribe={subscribe} onOpenChat={openChat} />}
           {section === 'chat' && (
             <ChatPanel

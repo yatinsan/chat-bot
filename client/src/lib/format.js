@@ -31,3 +31,24 @@ export function chatLabel(chat) {
 export function channelOf(chatId) {
   return String(chatId || '').startsWith('web-') ? 'Web' : 'Telegram';
 }
+
+export function contactHref(contact) {
+  const value = String(contact || '').trim();
+  if (!value || value.toLowerCase() === 'not provided') return null;
+  if (value.includes('@')) {
+    return { href: `mailto:${value}`, label: 'Email them', display: value };
+  }
+  const digits = value.replace(/[^\d+]/g, '');
+  if (digits.replace(/\D/g, '').length >= 7) {
+    return { href: `tel:${digits}`, label: 'Call them', display: value };
+  }
+  return null;
+}
+
+export function scoreBand(score) {
+  const value = Number(score);
+  if (!Number.isFinite(value) || value <= 0) return '';
+  if (value >= 7) return 'score-high';
+  if (value >= 4) return 'score-mid';
+  return 'score-low';
+}

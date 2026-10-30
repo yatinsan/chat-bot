@@ -21,6 +21,12 @@ export async function initDB() {
     )
   `);
 
+  const columns = await db.all('PRAGMA table_info(leads)');
+  const names = new Set(columns.map((column) => column.name));
+  if (!names.has('stack')) await db.exec('ALTER TABLE leads ADD COLUMN stack TEXT');
+  if (!names.has('lead_score')) await db.exec('ALTER TABLE leads ADD COLUMN lead_score INTEGER');
+  if (!names.has('score_reason')) await db.exec('ALTER TABLE leads ADD COLUMN score_reason TEXT');
+
   await db.exec(`
     CREATE TABLE IF NOT EXISTS messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,6 +50,13 @@ export async function upsertLead(chatId, data) {
   const contact = data.contact || (existing ? existing.contact : 'Not provided');
   const service = data.service || (existing ? existing.service : 'Not specified');
   const meeting_time = data.meeting_time || (existing ? existing.meeting_time : '');
+  const stack = data.stack || (existing ? existing.stack : '') || '';
+  const score_reason = data.score_reason || (existing ? existing.score_reason : '') || '';
+  let lead_score = existing ? existing.lead_score : null;
+  if (data.lead_score !== undefined && data.lead_score !== null && data.lead_score !== '') {
+    const parsed = Number(data.lead_score);
+    if (Number.isFinite(parsed)) lead_score = Math.max(1, Math.min(10, Math.round(parsed)));
+  }
   
   // Combine insights
   let insights = existing ? existing.insights : '';
@@ -56,16 +69,19 @@ export async function upsertLead(chatId, data) {
   }
 
   await db.run(
-    `INSERT INTO leads (chat_id, name, contact, insights, service, meeting_time, updated_at) 
-     VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-     ON CONFLICT(chat_id) DO UPDATE SET 
-      name=excluded.name, 
-      contact=excluded.contact, 
-      insights=excluded.insights, 
-      service=excluded.service, 
+    `INSERT INTO leads (chat_id, name, contact, insights, service, meeting_time, stack, lead_score, score_reason, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(chat_id) DO UPDATE SET
+      name=excluded.name,
+      contact=excluded.contact,
+      insights=excluded.insights,
+      service=excluded.service,
       meeting_time=excluded.meeting_time,
+      stack=excluded.stack,
+      lead_score=excluded.lead_score,
+      score_reason=excluded.score_reason,
       updated_at=CURRENT_TIMESTAMP`,
-    [chatId.toString(), name, contact, insights, service, meeting_time]
+    [chatId.toString(), name, contact, insights, service, meeting_time, stack, lead_score, score_reason]
   );
 }
 
@@ -77,6 +93,20 @@ export async function getEnquiries() {
 export async function getLead(chatId) {
   if (!db) await initDB();
   return await db.get('SELECT * FROM leads WHERE chat_id = ?', [chatId.toString()]);
+}
+
+export async function deleteChat(chatId) {
+  if (!db) await initDB();
+  const id = chatId.toString();
+  await db.exec('BEGIN');
+  try {
+    await db.run('DELETE FROM messages WHERE chat_id = ?', [id]);
+    await db.run('DELETE FROM leads WHERE chat_id = ?', [id]);
+    await db.exec('COMMIT');
+  } catch (error) {
+    await db.exec('ROLLBACK');
+    throw error;
+  }
 }
 
 export async function saveMessage(chatId, role, content) {
@@ -104,7 +134,11 @@ export async function listChats() {
       l.name,
       l.contact,
       l.service,
+      l.stack,
+      l.insights,
       l.meeting_time,
+      l.lead_score,
+      l.score_reason,
       chats.message_count,
       last.content AS last_message,
       last.role AS last_role,
