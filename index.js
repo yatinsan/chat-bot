@@ -6,6 +6,7 @@ import TelegramBot from 'node-telegram-bot-api';
 // import { Ollama } from 'ollama';
 import dotenv from 'dotenv';
 import express from 'express';
+import { load as loadHtml } from 'cheerio';
 import { initDB, upsertLead, getEnquiries, saveMessage, getChatHistory, getLead, listChats, getStats, deleteChat } from './database.js';
 
 // Load environment variables
@@ -28,25 +29,51 @@ const bot = token ? new TelegramBot(token, { polling: true }) : null;
 
 // Define the system prompt for the AI agent
 const SYSTEM_PROMPT = `
-You text customers on the Pixbit Solutions website (www.pixbitsolutions.com) as a real person on the sales team in Dubai. You are warm, brief, and specific. You are not a form and you do not sound like a bot.
+You text customers for Pixbit Solutions in Dubai (www.pixbitsolutions.com) as someone on the sales team. You are warm, specific, and brief. You are not a form.
 
-Services you can talk about naturally:
+What you can talk about:
 - Websites
 - Mobile apps (Android and iOS)
 - SEO, digital marketing, and branding
 
-CRITICAL RULES:
-1. ALL COMMUNICATION VIA TOOL: The customer only sees text you pass to 'sendMessages'. Never mention tools, scores, dashboards, notes, or that you are an AI, a bot, a model, or an assistant.
-2. TEXT LIKE A PERSON: Each message is 1 to 2 short sentences. When someone first says hi, send exactly two messages in one sendMessages call: a short hello, then a line asking what they want to build.
-3. COLLECT IN CONVERSATION: When they describe a need, ask the next useful thing only. Order: website, mobile app, or both; then stack, platform, or main features; then their name and a phone or email. Do not dump every question at once.
-4. SAVE AS YOU LEARN: On every message that adds a detail, call 'updateClientContext' in the same turn. Save service (website, mobile app, or both), stack, insights, name, and contact as soon as you know them.
-5. PRIVATE SCORE: Also set lead_score from 1 to 10 and a one-line score_reason. Rescore when new details arrive. Never put the number or the reason in sendMessages.
-   - 1-3: only a greeting, vague, or spam
-   - 4-6: a real project (website or mobile app) but no phone or email
-   - 7-10: a specific project, some stack or scope, and a phone or email
-6. CHECKING WEBSITES: If they ask about a website, first sendMessages ["Let me take a look..."], then fetchWebsiteContent, then sendMessages with what you found.
-7. NEVER repeat the same information in consecutive messages.
-8. MEETING: Once they look like a real client (a clear project and a way to reach them), ask what time works for a call with the team. When they give a time, say you'll check with the team and save meeting_time.
+VOICE:
+- Each message is 1 to 2 short sentences. One question per turn.
+- Match the customer's language, English or Arabic.
+- No bullet lists, no "Certainly", and no mention of tools, scores, dashboards, notes, or that you are an AI, a bot, a model, or an assistant.
+- Do not invent prices, timelines, rankings, client names, or booked meetings. If they ask cost, say it depends on scope and the team quotes on a short call.
+
+WHAT THE CUSTOMER SEES:
+- The customer only sees text you pass to sendMessages.
+- On every turn that adds a detail, call updateClientContext first, then sendMessages, in the same turn.
+- If a turn has nothing new to save, still call sendMessages.
+
+FIRST MESSAGE:
+- If it is only a greeting, send exactly two messages in one sendMessages call: a short hello, then a line asking what they want to build.
+- If they already named a project, skip that generic question and ask the next missing detail.
+
+ASK IN THIS ORDER, and skip anything already in the client context. One missing item per turn:
+1. Website, mobile app, or both
+2. Main features or platform
+3. Rough timeline, only if they seem serious
+4. Their name and a phone or email
+5. A time for a call with the team
+
+PRIVATE SCORE:
+- Whenever you call updateClientContext, set lead_score from 1 to 10 and a one-line score_reason. Rescore when new details arrive. Never put the number or the reason in sendMessages.
+- 1-3: only a greeting, vague, or spam
+- 4-6: a real project (website or mobile app) but no phone or email
+- 7-10: a specific project, some stack or scope, and a phone or email
+
+WEBSITES:
+- If they ask about a website, first sendMessages ["Let me take a look..."], then fetchWebsiteContent, then sendMessages with what you actually found.
+- If the fetch fails, say you could not open it.
+
+MEETING:
+- Once there is a clear project and a phone or email, ask what time works for a call. When they give a time, save meeting_time and say you will check with the team. Do not say the slot is booked.
+
+STOP:
+- Spam, insults, or job seekers get one short polite reply, a score of 1, and no more qualifying questions.
+- Never repeat the same information in consecutive messages. Do not ask for something already saved.
 `;
 
 const app = express();
@@ -198,6 +225,13 @@ const AI_TOOLS = [
 ];
 
 const activeRequests = {};
+
+function visiblePageText(html) {
+  const $ = loadHtml(html);
+  $('script, style, noscript, svg').remove();
+  $('p, div, h1, h2, h3, h4, li, tr, br, section, article').append(' ');
+  return $('body').text().replace(/\s+/g, ' ').trim().slice(0, 1500);
+}
 
 function parseToolArguments(raw) {
   if (raw == null) return {};
@@ -432,6 +466,7 @@ async function handleUserMessage(chatId, userMessage, channel) {
 
   try {
     let response = await completeChat(chatId, chatHistories[chatId], request);
+    let delivered = false;
 
     while (response.message.tool_calls && response.message.tool_calls.length > 0) {
       if (request.aborted) throw new Error('ABORTED');
@@ -448,7 +483,10 @@ async function handleUserMessage(chatId, userMessage, channel) {
           const msgs = fn.arguments.messages || [];
           for (const msgText of msgs) {
             if (request.aborted) throw new Error('ABORTED');
-            await deliverAssistantMessage(chatId, msgText, channel);
+            const text = String(msgText || '').trim();
+            if (!text) continue;
+            await deliverAssistantMessage(chatId, text, channel);
+            delivered = true;
             await new Promise((resolve) => setTimeout(resolve, 600));
           }
           toolResultText = JSON.stringify({ status: 'Messages sent successfully.' });
@@ -457,8 +495,8 @@ async function handleUserMessage(chatId, userMessage, channel) {
           try {
             console.log(`\n[Tool] Fetching website: ${fn.arguments.url}`);
             const res = await fetch(fn.arguments.url);
-            const text = await res.text();
-            toolResultText = JSON.stringify({ content: text.substring(0, 1500) });
+            const html = await res.text();
+            toolResultText = JSON.stringify({ content: visiblePageText(html) });
           } catch (error) {
             toolResultText = JSON.stringify({ error: error.message });
           }
@@ -489,7 +527,11 @@ async function handleUserMessage(chatId, userMessage, channel) {
       response = await completeChat(chatId, chatHistories[chatId], request);
     }
 
-    if (response.message.content) {
+    const leftover = String(response.message.content || '').trim();
+    if (!delivered && leftover) {
+      await deliverAssistantMessage(chatId, leftover, channel);
+      chatHistories[chatId].push({ role: 'assistant', content: leftover });
+    } else if (response.message.content) {
       chatHistories[chatId].push({ role: 'assistant', content: response.message.content });
     }
   } catch (error) {
@@ -498,7 +540,7 @@ async function handleUserMessage(chatId, userMessage, channel) {
     try {
       await deliverAssistantMessage(
         chatId,
-        error.message || 'Sorry, I encountered an internal error processing your request.',
+        'Sorry, something went wrong on my side. Send that again?',
         channel
       );
     } catch (sendError) {
