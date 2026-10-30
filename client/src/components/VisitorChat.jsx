@@ -77,10 +77,7 @@ export default function VisitorChat() {
     setError('');
   }
 
-  function submit(event) {
-    event.preventDefault();
-    const content = draft.trim();
-    if (!content) return;
+  function sendContent(content) {
     if (status !== 'online') {
       setError('Still connecting. Try again in a second.');
       return;
@@ -97,9 +94,18 @@ export default function VisitorChat() {
     send({ type: 'send', chatId: id, content });
   }
 
+  function submit(event) {
+    event.preventDefault();
+    const content = draft.trim();
+    if (!content) return;
+    sendContent(content);
+  }
+
   const presence = status === 'online' ? 'Online' : status === 'connecting' ? 'Connecting…' : 'Reconnecting…';
+  const showWelcome = messages.length === 0 && !typing;
 
   return (
+    <div className="visitor-page">
     <div className="visitor">
       <header className="visitor-head">
         <div className="brand">
@@ -112,11 +118,18 @@ export default function VisitorChat() {
         <button type="button" className="btn" onClick={startNew}>New chat</button>
       </header>
       {error && <p className="banner">{error}</p>}
-      <MessageThread
-        messages={messages}
-        typing={typing}
-        emptyText="Hi — what are you looking to build? A website, a mobile app, or both?"
-      />
+      {showWelcome ? (
+        <div className="visitor-welcome">
+          <span className="brand-mark">P</span>
+          <p>Tell us what you want to build</p>
+          <div className="visitor-chips">
+            <button type="button" onClick={() => sendContent('A website')} disabled={status !== 'online'}>A website</button>
+            <button type="button" onClick={() => sendContent('A mobile app')} disabled={status !== 'online'}>A mobile app</button>
+          </div>
+        </div>
+      ) : (
+        <MessageThread messages={messages} typing={typing} />
+      )}
       <form className="composer" onSubmit={submit}>
         <textarea
           rows={2}
@@ -134,6 +147,7 @@ export default function VisitorChat() {
           Send
         </button>
       </form>
+    </div>
     </div>
   );
 }
