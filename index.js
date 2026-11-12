@@ -37,11 +37,15 @@ What you can talk about:
 - SEO, digital marketing, and branding
 
 VOICE:
-- Text like a person on WhatsApp. In one sendMessages call, send 1 to 3 separate bubbles. Most turns are 2.
+- Text like a person on WhatsApp, a business development colleague at Pixbit. Professional and approachable. Not a script, and not a help desk.
+- In one sendMessages call, send 1 to 3 separate bubbles. Most turns are 2. A simple acknowledgement can be one bubble. Do not force three.
 - Length follows what they just wrote. A short "hi" gets a short reply. If they explain their shop in a paragraph, the first bubble can be a few sentences that actually respond to what they said, then a shorter bubble with one question.
 - Do not make every bubble the same size. Do not pad. Do not write an essay. One question per turn, in the last bubble.
-- Match the customer's language, English or Arabic.
-- No bullet lists, no "Certainly", and no mention of tools, scores, dashboards, notes, or that you are an AI, a bot, a model, or an assistant.
+- Use a natural acknowledgement when it fits ("Got it", "Oh, nice"). Match their tone: casual if they are casual, plain and polite if they are formal.
+- Occasional conversational phrasing is fine. Emoji only rarely, never more than one, and only if they used one first.
+- Do not echo their whole message back. Do not ask for something already in the client context.
+- No bullet lists, no "Certainly", no "How may I assist you", and no mention of tools, scores, dashboards, or notes.
+- Do not claim to be a human, and do not invent personal stories. Do not bring up that this chat is automated. If they ask directly whether it is a bot or AI, answer honestly in one short bubble: the chat is automated, and the team follows up.
 - Do not invent prices, timelines, rankings, client names, or booked meetings.
 - Do not rush. Answer what they just asked before you ask for the next detail. Never ask for a phone or email in the same turn as a price question.
 
@@ -52,7 +56,7 @@ WHAT THE CUSTOMER SEES:
 
 FIRST MESSAGE:
 - If it is only a greeting, send two short messages in one sendMessages call.
-- First message: greet them and say we are Pixbit, in your own words. Do not reuse one fixed sentence.
+- First message: greet them and say we are Pixbit, in your own words. Do not reuse one fixed sentence. No "How may I assist you today?"
 - Second message: ask what they need, in your own words. A website, a mobile app, or both is the usual question, but phrase it freshly each time.
 - If they already named a project, still say who we are, then answer what they described in your own words. If they wrote a lot, that first bubble can be longer. Then ask the next missing detail instead of the opening question.
 
@@ -76,7 +80,8 @@ PRIVATE SCORE:
 - 7-10: a specific project, some stack or scope, and a phone or email
 
 WEBSITES:
-- If they ask about a website, first sendMessages ["Let me take a look..."], then fetchWebsiteContent, then sendMessages with what you actually found.
+- If they ask about a website, call fetchWebsiteContent for that URL. You may also sendMessages ["Let me take a look..."] in that same turn.
+- After the page text comes back, sendMessages with what you actually found. Do not describe the page before that tool result.
 - If the fetch fails, say you could not open it.
 
 MEETING:
@@ -169,6 +174,18 @@ function sendTo(socket, event) {
 
 const chatHistories = {};
 const MAX_HISTORY_LENGTH = 20;
+const MAX_BUBBLES = 3;
+const MAX_TOOL_ROUNDS = 4;
+const BUBBLE_GAP_MS = 200;
+
+function readNonNegativeMs(name, fallback) {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
+const MESSAGE_DELAY_MIN_MS = readNonNegativeMs('MESSAGE_DELAY_MIN_MS', 350);
+const MESSAGE_DELAY_MAX_MS = readNonNegativeMs('MESSAGE_DELAY_MAX_MS', 1100);
+const MESSAGE_DELAY_PER_CHAR_MS = readNonNegativeMs('MESSAGE_DELAY_PER_CHAR_MS', 12);
 
 console.log('🤖 Assistant Bot (Tool Calling Edition) is starting...');
 if (useGemini) {
@@ -183,7 +200,7 @@ const AI_TOOLS = [
     type: 'function',
     function: {
       name: 'sendMessages',
-      description: 'Sends one or more text messages to the user (Telegram or the website chat). ALWAYS pass an array so each string is its own chat bubble, sent in order. Bubble length should vary with what the customer just wrote.',
+      description: 'Sends one or more text messages to the user (Telegram or the website chat). ALWAYS pass an array so each string is its own chat bubble, sent in order. At most 3 bubbles are delivered. Empty and duplicate strings are skipped. Bubble length should vary with what the customer just wrote.',
       parameters: {
         type: 'object',
         properties: {
@@ -412,6 +429,77 @@ function completeChat(chatId, messages, request) {
   // return streamOllamaChat(chatId, messages, request);
 }
 
+function bubbleDelayMs(text) {
+  const min = Math.min(MESSAGE_DELAY_MIN_MS, MESSAGE_DELAY_MAX_MS);
+  const max = Math.max(MESSAGE_DELAY_MIN_MS, MESSAGE_DELAY_MAX_MS);
+  const scaled = min + String(text || '').length * MESSAGE_DELAY_PER_CHAR_MS;
+  return Math.min(max, Math.max(min, scaled));
+}
+
+function turnIsCurrent(chatId, request) {
+  return Boolean(request) && !request.aborted && activeRequests[chatId] === request;
+}
+
+function assertCurrentTurn(chatId, request) {
+  if (!turnIsCurrent(chatId, request)) throw new Error('ABORTED');
+}
+
+function sleepWhileCurrent(ms, chatId, request) {
+  if (ms <= 0) {
+    assertCurrentTurn(chatId, request);
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    const signal = request.abortController?.signal;
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      if (!turnIsCurrent(chatId, request)) {
+        reject(new Error('ABORTED'));
+        return;
+      }
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error('ABORTED'));
+    };
+    if (request.aborted || signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function normalizeBubbles(raw) {
+  if (!Array.isArray(raw)) return null;
+  const bubbles = [];
+  for (const item of raw) {
+    let text = '';
+    if (typeof item === 'string' || typeof item === 'number') text = String(item).trim();
+    else if (item && typeof item === 'object' && typeof item.text === 'string') text = item.text.trim();
+    if (!text) continue;
+    if (bubbles[bubbles.length - 1] === text) continue;
+    bubbles.push(text);
+    if (bubbles.length >= MAX_BUBBLES) break;
+  }
+  return bubbles;
+}
+
+function orderedToolCalls(toolCalls) {
+  const other = [];
+  const sends = [];
+  for (const toolCall of toolCalls) {
+    if (toolCall.function?.name === 'sendMessages') sends.push(toolCall);
+    else other.push(toolCall);
+  }
+  return [...other, ...sends];
+}
+
+function setTyping(chatId, active) {
+  broadcast({ type: 'typing', chatId, active });
+}
+
 async function deliverAssistantMessage(chatId, text, channel) {
   const saved = await saveMessage(chatId, 'assistant', text);
   broadcast({ type: 'message', message: saved });
@@ -420,6 +508,47 @@ async function deliverAssistantMessage(chatId, text, channel) {
     await bot.sendMessage(chatId, text);
   }
   return saved;
+}
+
+function rememberDeliveredBubbles(history, texts, checkpoint) {
+  if (!history || texts.length === 0) return;
+  const seen = new Set();
+  for (let index = checkpoint; index < history.length; index += 1) {
+    const message = history[index];
+    if (message.role === 'assistant' && !message.tool_calls) seen.add(message.content);
+  }
+  const missing = [];
+  for (const text of texts) {
+    if (seen.has(text)) continue;
+    seen.add(text);
+    missing.push(text);
+  }
+  if (missing.length === 0) return;
+  const newerUser = history.findIndex((message, index) => index >= checkpoint && message.role === 'user');
+  const insertAt = newerUser === -1 ? history.length : newerUser;
+  history.splice(insertAt, 0, ...missing.map((text) => ({ role: 'assistant', content: text })));
+}
+
+async function deliverBubbles(chatId, bubbles, channel, request, sentThisTurn, deliveredTexts) {
+  const sent = [];
+  let isFirst = true;
+  for (const text of bubbles) {
+    assertCurrentTurn(chatId, request);
+    if (sentThisTurn.has(text)) continue;
+    if (!isFirst) {
+      await sleepWhileCurrent(BUBBLE_GAP_MS, chatId, request);
+      setTyping(chatId, true);
+      await sleepWhileCurrent(bubbleDelayMs(text), chatId, request);
+      assertCurrentTurn(chatId, request);
+    }
+    isFirst = false;
+    await deliverAssistantMessage(chatId, text, channel);
+    setTyping(chatId, false);
+    sentThisTurn.add(text);
+    deliveredTexts.push(text);
+    sent.push(text);
+  }
+  return sent;
 }
 
 async function handleUserMessage(chatId, userMessage, channel) {
@@ -477,40 +606,56 @@ async function handleUserMessage(chatId, userMessage, channel) {
     }, 4000);
   }
 
+  const historyCheckpoint = chatHistories[chatId].length;
+  const deliveredTexts = [];
+
   try {
     let response = await completeChat(chatId, chatHistories[chatId], request);
     let delivered = false;
+    const sentThisTurn = new Set();
+    let toolRound = 0;
 
     while (response.message.tool_calls && response.message.tool_calls.length > 0) {
-      if (request.aborted) throw new Error('ABORTED');
-      chatHistories[chatId].push(response.message);
-      let shouldBreak = false;
+      assertCurrentTurn(chatId, request);
+      if (toolRound >= MAX_TOOL_ROUNDS) break;
+      toolRound += 1;
 
-      for (const toolCall of response.message.tool_calls) {
+      const results = new Map();
+      const bubblesThisRound = [];
+      let fetchedThisRound = false;
+      let invalidSend = false;
+
+      for (const toolCall of orderedToolCalls(response.message.tool_calls)) {
+        assertCurrentTurn(chatId, request);
         const fn = toolCall.function;
         console.log(`\n[AI Tool Call] ${fn.name}(${JSON.stringify(fn.arguments)})`);
 
         let toolResultText = '';
 
         if (fn.name === 'sendMessages') {
-          const msgs = fn.arguments.messages || [];
-          for (const msgText of msgs) {
-            if (request.aborted) throw new Error('ABORTED');
-            const text = String(msgText || '').trim();
-            if (!text) continue;
-            await deliverAssistantMessage(chatId, text, channel);
-            delivered = true;
-            await new Promise((resolve) => setTimeout(resolve, 600));
+          const bubbles = normalizeBubbles(fn.arguments?.messages);
+          if (!bubbles || bubbles.length === 0) {
+            invalidSend = true;
+            toolResultText = JSON.stringify({ error: 'messages must be a non-empty array of text bubbles.' });
+          } else {
+            const sent = await deliverBubbles(chatId, bubbles, channel, request, sentThisTurn, deliveredTexts);
+            bubblesThisRound.push(...sent);
+            if (sent.length === 0) {
+              toolResultText = JSON.stringify({ status: 'No new messages to send.' });
+            } else {
+              delivered = true;
+              toolResultText = JSON.stringify({ status: 'Messages sent successfully.', messages: sent });
+            }
           }
-          toolResultText = JSON.stringify({ status: 'Messages sent successfully.' });
-          shouldBreak = true;
         } else if (fn.name === 'fetchWebsiteContent') {
+          fetchedThisRound = true;
           try {
             console.log(`\n[Tool] Fetching website: ${fn.arguments.url}`);
-            const res = await fetch(fn.arguments.url);
+            const res = await fetch(fn.arguments.url, { signal: request.abortController?.signal });
             const html = await res.text();
             toolResultText = JSON.stringify({ content: visiblePageText(html) });
           } catch (error) {
+            if (request.aborted || error.name === 'AbortError') throw new Error('ABORTED');
             toolResultText = JSON.stringify({ error: error.message });
           }
         } else if (fn.name === 'updateClientContext') {
@@ -527,30 +672,53 @@ async function handleUserMessage(chatId, userMessage, channel) {
           toolResultText = JSON.stringify({ error: `Unknown tool: ${fn.name}` });
         }
 
+        results.set(toolCall, toolResultText);
+      }
+
+      assertCurrentTurn(chatId, request);
+      chatHistories[chatId].push(response.message);
+      for (const toolCall of response.message.tool_calls) {
         const toolMessage = {
           role: 'tool',
-          content: toolResultText,
-          name: fn.name,
+          content: results.get(toolCall) || JSON.stringify({ error: 'Tool did not run.' }),
+          name: toolCall.function?.name,
         };
         if (toolCall.id) toolMessage.tool_call_id = toolCall.id;
         chatHistories[chatId].push(toolMessage);
       }
 
-      if (shouldBreak) break;
+      for (const text of bubblesThisRound) {
+        chatHistories[chatId].push({ role: 'assistant', content: text });
+      }
+
+      assertCurrentTurn(chatId, request);
+      if (fetchedThisRound) {
+        setTyping(chatId, true);
+        response = await completeChat(chatId, chatHistories[chatId], request);
+        continue;
+      }
+      if (delivered) break;
+      if (invalidSend && String(response.message.content || '').trim()) break;
+      setTyping(chatId, true);
       response = await completeChat(chatId, chatHistories[chatId], request);
     }
 
     const leftover = String(response.message.content || '').trim();
     if (!delivered && leftover) {
-      await deliverAssistantMessage(chatId, leftover, channel);
-      chatHistories[chatId].push({ role: 'assistant', content: leftover });
-    } else if (response.message.content) {
-      chatHistories[chatId].push({ role: 'assistant', content: response.message.content });
+      assertCurrentTurn(chatId, request);
+      if (!sentThisTurn.has(leftover)) {
+        await deliverAssistantMessage(chatId, leftover, channel);
+        chatHistories[chatId].push({ role: 'assistant', content: leftover });
+      }
     }
   } catch (error) {
-    if (error.message === 'ABORTED') return;
+    if (error.message === 'ABORTED') {
+      rememberDeliveredBubbles(chatHistories[chatId], deliveredTexts, historyCheckpoint);
+      return;
+    }
     console.error('Error during AI processing:', error.message);
     try {
+      if (!turnIsCurrent(chatId, request)) return;
       await deliverAssistantMessage(
         chatId,
         'Sorry, something went wrong on my side. Send that again?',
