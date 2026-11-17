@@ -9,6 +9,7 @@ import BusinessPanel from './components/BusinessPanel.jsx';
 import MeetingsPanel from './components/MeetingsPanel.jsx';
 import { useWebSocket } from './hooks/useWebSocket.js';
 import './meetings.css';
+import './summary.css';
 
 const TITLES = {
   inbox: ['Inbox', 'Each chat, what they need, and who to contact'],

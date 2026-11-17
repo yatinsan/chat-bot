@@ -3,6 +3,7 @@ import ConversationList from './ConversationList.jsx';
 import MessageThread from './MessageThread.jsx';
 import MeetingCard from './MeetingCard.jsx';
 import TagChips from './TagChips.jsx';
+import ChatSummary from './ChatSummary.jsx';
 import { channelOf, chatLabel, contactHref, formatDateTime, scoreBand } from '../lib/format.js';
 
 function sortChats(chats) {
@@ -114,6 +115,7 @@ export default function InboxPanel({ subscribe }) {
           </div>
         </header>
         {error && <p className="banner">{error}</p>}
+        {selectedId && <ChatSummary chatId={selectedId} messageCount={messages.length} />}
         {selectedId
           ? <MessageThread messages={messages} />
           : <div className="thread empty-thread"><p>Pick a conversation.</p></div>}

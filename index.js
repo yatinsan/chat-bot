@@ -9,7 +9,7 @@ import TelegramBot from 'node-telegram-bot-api';
 import dotenv from 'dotenv';
 import express from 'express';
 import { load as loadHtml } from 'cheerio';
-import { initDB, upsertLead, getEnquiries, saveMessage, getChatHistory, getLead, listChats, getStats, deleteChat, getBusinessProfile, saveBusinessProfile, DEFAULT_BUSINESS_PROFILE, BUSINESS_LIMITS, createMeeting, getMeeting, getOpenMeetingForChat, updateMeetingRequest, decideMeeting, listMeetings } from './database.js';
+import { initDB, upsertLead, getEnquiries, saveMessage, getChatHistory, getLead, listChats, getStats, deleteChat, getBusinessProfile, saveBusinessProfile, DEFAULT_BUSINESS_PROFILE, BUSINESS_LIMITS, createMeeting, getMeeting, getOpenMeetingForChat, updateMeetingRequest, decideMeeting, listMeetings, getMessageCount, getChatSummary, saveChatSummary } from './database.js';
 
 // Meetings are proposed in the customer's local time. One zone for the whole business.
 const BUSINESS_TZ = 'Asia/Dubai';
@@ -237,6 +237,98 @@ app.delete('/api/leads/:chatId', async (req, res) => {
     res.json({ ok: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// Conversation summary for the team. Uses only what the chat says; anything else is "Not mentioned yet".
+const SUMMARY_MAX_MESSAGES = 60;
+const SUMMARY_EMPTY = 'Not mentioned yet';
+
+function cleanSummaryField(value) {
+  const text = String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, 240);
+  return text || SUMMARY_EMPTY;
+}
+
+function parseSummaryJson(content) {
+  const text = String(content || '').trim();
+  try {
+    return JSON.parse(text);
+  } catch {
+    const match = text.match(/\{[\s\S]*\}/);
+    if (match) return JSON.parse(match[0]);
+    throw new Error('The summary came back in an unexpected format.');
+  }
+}
+
+async function buildChatSummary(chatId) {
+  if (!geminiApiKey) throw new Error('GEMINI_API_KEY is not set.');
+  const history = (await getChatHistory(chatId))
+    .filter((message) => ['user', 'assistant', 'admin'].includes(message.role))
+    .slice(-SUMMARY_MAX_MESSAGES);
+  if (history.length === 0) throw new Error('This chat has no messages yet.');
+
+  const transcript = history
+    .map((message) => {
+      const who = message.role === 'user' ? 'Customer' : message.role === 'admin' ? 'Team' : 'Assistant';
+      return `${who}: ${message.content}`;
+    })
+    .join('\n');
+
+  const prompt = `Summarise this sales chat for the team. Use only facts the chat states. If something is not stated, write "${SUMMARY_EMPTY}".
+Reply with JSON only, with exactly these keys:
+{"wants": "what the customer wants built, one short line", "budget": "budget or price range they mentioned", "timeline": "when they need it", "missing": "what we still need to ask or confirm, e.g. contact, scope, decision maker"}
+
+CHAT:
+${transcript}`;
+
+  const response = await fetch('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${geminiApiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: geminiModel,
+      messages: [{ role: 'user', content: prompt }],
+      response_format: { type: 'json_object' },
+    }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(geminiErrorDetail(data) || 'Could not create the summary.');
+
+  const parsed = parseSummaryJson(data.choices?.[0]?.message?.content);
+  const summary = {
+    wants: cleanSummaryField(parsed.wants),
+    budget: cleanSummaryField(parsed.budget),
+    timeline: cleanSummaryField(parsed.timeline),
+    missing: cleanSummaryField(parsed.missing),
+  };
+  await saveChatSummary(chatId, summary, await getMessageCount(chatId));
+  return summary;
+}
+
+async function summaryPayload(chatId) {
+  const [saved, currentCount] = await Promise.all([getChatSummary(chatId), getMessageCount(chatId)]);
+  return {
+    summary: saved?.summary ?? null,
+    message_count: saved?.message_count ?? null,
+    current_count: currentCount,
+    updated_at: saved?.updated_at ?? null,
+  };
+}
+
+app.get('/api/chats/:chatId/summary', async (req, res) => {
+  try {
+    res.json(await summaryPayload(String(req.params.chatId)));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/chats/:chatId/summary', async (req, res) => {
+  try {
+    const chatId = String(req.params.chatId);
+    await buildChatSummary(chatId);
+    res.json(await summaryPayload(chatId));
+  } catch (error) {
+    res.status(502).json({ error: error.message });
   }
 });
 

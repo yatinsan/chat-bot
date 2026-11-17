@@ -65,6 +65,15 @@ export async function initDB() {
     )
   `);
 
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS chat_summaries (
+      chat_id TEXT PRIMARY KEY,
+      summary TEXT NOT NULL,
+      message_count INTEGER NOT NULL,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
   console.log('📦 Database initialized (Iterative Leads & Chat History).');
 }
 
@@ -357,4 +366,30 @@ export async function getStats() {
       (SELECT COUNT(*) FROM meetings WHERE status = 'confirmed') AS meetings,
       (SELECT COUNT(*) FROM meetings WHERE status IN ('pending', 'countered')) AS pending_meetings
   `);
+}
+
+export async function getMessageCount(chatId) {
+  if (!db) await initDB();
+  const row = await db.get('SELECT COUNT(*) AS count FROM messages WHERE chat_id = ?', [chatId.toString()]);
+  return Number(row?.count) || 0;
+}
+
+export async function getChatSummary(chatId) {
+  if (!db) await initDB();
+  const row = await db.get('SELECT * FROM chat_summaries WHERE chat_id = ?', [chatId.toString()]);
+  if (!row) return null;
+  return { summary: JSON.parse(row.summary), message_count: row.message_count, updated_at: row.updated_at };
+}
+
+export async function saveChatSummary(chatId, summary, messageCount) {
+  if (!db) await initDB();
+  await db.run(
+    `INSERT INTO chat_summaries (chat_id, summary, message_count, updated_at)
+     VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(chat_id) DO UPDATE SET
+       summary=excluded.summary,
+       message_count=excluded.message_count,
+       updated_at=CURRENT_TIMESTAMP`,
+    [chatId.toString(), JSON.stringify(summary), messageCount]
+  );
 }
