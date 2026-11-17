@@ -4,6 +4,7 @@ const ITEMS = [
   { id: 'chat', label: 'Live Chat', icon: 'chat' },
   { id: 'history', label: 'History', icon: 'clock' },
   { id: 'leads', label: 'Leads', icon: 'users' },
+  { id: 'business', label: 'Business', icon: 'business' },
 ];
 
 function Icon({ name }) {
@@ -40,6 +41,15 @@ function Icon({ name }) {
       </svg>
     );
   }
+  if (name === 'business') {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 10.5h16v8a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18.5v-8Z" />
+        <path d="M8 10.5V7.5A2.5 2.5 0 0 1 10.5 5h3A2.5 2.5 0 0 1 16 7.5v3" />
+        <path d="M4 13.5h16" />
+      </svg>
+    );
+  }
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <circle cx="9" cy="9" r="3" />
@@ -50,13 +60,15 @@ function Icon({ name }) {
   );
 }
 
-export default function Sidebar({ section, onSection, status }) {
+export default function Sidebar({ section, onSection, status, companyName }) {
+  const name = companyName?.trim() || 'Pixbit Solutions';
+  const mark = name.charAt(0).toUpperCase() || 'P';
   return (
     <aside className="sidebar">
       <div className="brand">
-        <span className="brand-mark">P</span>
+        <span className="brand-mark">{mark}</span>
         <div>
-          <strong>Pixbit</strong>
+          <strong>{name}</strong>
           <small>Sales desk</small>
         </div>
       </div>

@@ -10,7 +10,9 @@ export default function VisitorChat() {
   const [draft, setDraft] = useState('');
   const [typing, setTyping] = useState(false);
   const [error, setError] = useState('');
+  const [companyName, setCompanyName] = useState('Pixbit Solutions');
   const chatRef = useRef(chatId);
+  const mark = companyName.trim().charAt(0).toUpperCase() || 'P';
 
   const { status, send } = useWebSocket((event) => {
     if (event.type === 'chat_created' && event.chatId) {
@@ -37,8 +39,21 @@ export default function VisitorChat() {
   });
 
   useEffect(() => {
-    document.title = 'Pixbit';
+    let cancelled = false;
+    fetch('/api/settings')
+      .then((response) => response.json())
+      .then((data) => {
+        if (!cancelled && data?.company_name) setCompanyName(data.company_name);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  useEffect(() => {
+    document.title = companyName;
+  }, [companyName]);
 
   useEffect(() => {
     chatRef.current = chatId;
@@ -109,9 +124,9 @@ export default function VisitorChat() {
     <div className="visitor">
       <header className="visitor-head">
         <div className="brand">
-          <span className="brand-mark">P</span>
+          <span className="brand-mark">{mark}</span>
           <div>
-            <strong>Pixbit</strong>
+            <strong>{companyName}</strong>
             <small>{presence}</small>
           </div>
         </div>
@@ -120,7 +135,7 @@ export default function VisitorChat() {
       {error && <p className="banner">{error}</p>}
       {showWelcome ? (
         <div className="visitor-welcome">
-          <span className="brand-mark">P</span>
+          <span className="brand-mark">{mark}</span>
           <p>Tell us what you want to build</p>
           <div className="visitor-chips">
             <button type="button" onClick={() => sendContent('A website')} disabled={status !== 'online'}>A website</button>

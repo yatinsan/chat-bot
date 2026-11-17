@@ -37,7 +37,92 @@ export async function initDB() {
     )
   `);
 
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS business_profile (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      company_name TEXT NOT NULL,
+      location TEXT NOT NULL,
+      website TEXT NOT NULL,
+      services TEXT NOT NULL,
+      about TEXT NOT NULL,
+      website_knowledge TEXT NOT NULL,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
   console.log('📦 Database initialized (Iterative Leads & Chat History).');
+}
+
+export const BUSINESS_LIMITS = {
+  company_name: 120,
+  location: 120,
+  website: 300,
+  services: 2000,
+  about: 4000,
+  website_knowledge: 6000,
+};
+
+export const DEFAULT_BUSINESS_PROFILE = {
+  company_name: 'Pixbit Solutions',
+  location: 'Dubai',
+  website: 'www.pixbitsolutions.com',
+  services: '- Websites\n- Mobile apps (Android and iOS)\n- SEO, digital marketing, and branding',
+  about: '',
+  website_knowledge: '',
+};
+
+function cleanProfileText(value, max) {
+  return String(value ?? '').replace(/\u0000/g, '').trim().slice(0, max);
+}
+
+export function normalizeBusinessProfile(input = {}) {
+  const source = input && typeof input === 'object' ? input : {};
+  const profile = {};
+  for (const [key, max] of Object.entries(BUSINESS_LIMITS)) {
+    const hasValue = Object.prototype.hasOwnProperty.call(source, key) && source[key] != null;
+    profile[key] = hasValue ? cleanProfileText(source[key], max) : DEFAULT_BUSINESS_PROFILE[key];
+  }
+  if (!profile.company_name) profile.company_name = DEFAULT_BUSINESS_PROFILE.company_name;
+  if (!profile.location) profile.location = DEFAULT_BUSINESS_PROFILE.location;
+  if (!profile.website) profile.website = DEFAULT_BUSINESS_PROFILE.website;
+  if (!profile.services) profile.services = DEFAULT_BUSINESS_PROFILE.services;
+  return profile;
+}
+
+export async function getBusinessProfile() {
+  if (!db) await initDB();
+  const row = await db.get(
+    'SELECT company_name, location, website, services, about, website_knowledge FROM business_profile WHERE id = 1'
+  );
+  if (!row) return { ...DEFAULT_BUSINESS_PROFILE };
+  return normalizeBusinessProfile(row);
+}
+
+export async function saveBusinessProfile(input) {
+  if (!db) await initDB();
+  const profile = normalizeBusinessProfile(input);
+  await db.run(
+    `INSERT INTO business_profile (
+       id, company_name, location, website, services, about, website_knowledge, updated_at
+     ) VALUES (1, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(id) DO UPDATE SET
+       company_name=excluded.company_name,
+       location=excluded.location,
+       website=excluded.website,
+       services=excluded.services,
+       about=excluded.about,
+       website_knowledge=excluded.website_knowledge,
+       updated_at=CURRENT_TIMESTAMP`,
+    [
+      profile.company_name,
+      profile.location,
+      profile.website,
+      profile.services,
+      profile.about,
+      profile.website_knowledge,
+    ]
+  );
+  return profile;
 }
 
 export async function upsertLead(chatId, data) {

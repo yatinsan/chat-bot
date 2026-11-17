@@ -1,13 +1,15 @@
 import { createServer } from 'http';
 import path from 'path';
 import { randomUUID } from 'crypto';
+import { isIP } from 'node:net';
+import { lookup } from 'node:dns/promises';
 import { WebSocketServer, WebSocket } from 'ws';
 import TelegramBot from 'node-telegram-bot-api';
 // import { Ollama } from 'ollama';
 import dotenv from 'dotenv';
 import express from 'express';
 import { load as loadHtml } from 'cheerio';
-import { initDB, upsertLead, getEnquiries, saveMessage, getChatHistory, getLead, listChats, getStats, deleteChat } from './database.js';
+import { initDB, upsertLead, getEnquiries, saveMessage, getChatHistory, getLead, listChats, getStats, deleteChat, getBusinessProfile, saveBusinessProfile, DEFAULT_BUSINESS_PROFILE, BUSINESS_LIMITS } from './database.js';
 
 // Load environment variables
 dotenv.config();
@@ -27,17 +29,33 @@ const bot = token ? new TelegramBot(token, { polling: true }) : null;
 // Initialize Ollama client
 // const ollama = new Ollama();
 
-// Define the system prompt for the AI agent
-const SYSTEM_PROMPT = `
-You text customers for Pixbit Solutions in Dubai (www.pixbitsolutions.com) the way a business development manager would. Speak as "we" for Pixbit. You are warm and specific. You are not a form, and you do not sound like a script.
+function isUntouchedProfile(profile) {
+  return Object.keys(DEFAULT_BUSINESS_PROFILE).every((key) => profile[key] === DEFAULT_BUSINESS_PROFILE[key]);
+}
+
+function businessFacts(profile) {
+  const about = profile.about.trim();
+  const knowledge = profile.website_knowledge.trim();
+  if (!about && !knowledge) return '';
+  const lines = ['', 'BUSINESS FACTS (private. Do not invent prices, clients, or claims that are not here):'];
+  if (about) lines.push(`About: ${about}`);
+  if (knowledge) lines.push('Website knowledge:', knowledge);
+  return `\n${lines.join('\n')}\n`;
+}
+
+function buildSystemPrompt(profile) {
+  const untouched = isUntouchedProfile(profile);
+  const name = untouched ? 'Pixbit' : profile.company_name;
+  const fullName = untouched ? 'Pixbit Solutions' : profile.company_name;
+  const services = profile.services.trim();
+  const prompt = `
+You text customers for ${fullName} in ${profile.location} (${profile.website}) the way a business development manager would. Speak as "we" for ${name}. You are warm and specific. You are not a form, and you do not sound like a script.
 
 What you can talk about:
-- Websites
-- Mobile apps (Android and iOS)
-- SEO, digital marketing, and branding
+${services}
 
 VOICE:
-- Text like a person on WhatsApp, a business development colleague at Pixbit. Professional and approachable. Not a script, and not a help desk.
+- Text like a person on WhatsApp, a business development colleague at ${name}. Professional and approachable. Not a script, and not a help desk.
 - In one sendMessages call, send 1 to 3 separate bubbles. Most turns are 2. A simple acknowledgement can be one bubble. Do not force three.
 - Length follows what they just wrote. A short "hi" gets a short reply. If they explain their shop in a paragraph, the first bubble can be a few sentences that actually respond to what they said, then a shorter bubble with one question.
 - Do not make every bubble the same size. Do not pad. Do not write an essay. One question per turn, in the last bubble.
@@ -56,7 +74,7 @@ WHAT THE CUSTOMER SEES:
 
 FIRST MESSAGE:
 - If it is only a greeting, send two short messages in one sendMessages call.
-- First message: greet them and say we are Pixbit, in your own words. Do not reuse one fixed sentence. No "How may I assist you today?"
+- First message: greet them and say we are ${name}, in your own words. Do not reuse one fixed sentence. No "How may I assist you today?"
 - Second message: ask what they need, in your own words. A website, a mobile app, or both is the usual question, but phrase it freshly each time.
 - If they already named a project, still say who we are, then answer what they described in your own words. If they wrote a lot, that first bubble can be longer. Then ask the next missing detail instead of the opening question.
 
@@ -93,8 +111,11 @@ STOP:
 - Spam, insults, or job seekers get one short polite reply, a score of 1, and no more qualifying questions.
 - Never repeat the same information in consecutive messages. Do not ask for something already saved.
 `;
+  return `${prompt.replace(/\s*$/, '\n')}${businessFacts(profile)}`;
+}
 
 const app = express();
+app.use(express.json({ limit: '64kb' }));
 const publicDir = path.resolve('public');
 
 app.get('/', (_req, res) => {
@@ -138,6 +159,36 @@ app.get('/api/stats', async (req, res) => {
     res.json(await getStats());
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/settings', async (_req, res) => {
+  try {
+    res.json(await getBusinessProfile());
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/settings', async (req, res) => {
+  try {
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+      res.status(400).json({ error: 'Settings must be an object.' });
+      return;
+    }
+    res.json(await saveBusinessProfile(req.body));
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/settings/scrape', async (req, res) => {
+  try {
+    const scraped = await scrapeWebsite(req.body?.url);
+    res.json(scraped);
+  } catch (error) {
+    const status = error.statusCode || 400;
+    res.status(status).json({ error: error.message });
   }
 });
 
@@ -256,11 +307,278 @@ const AI_TOOLS = [
 
 const activeRequests = {};
 
-function visiblePageText(html) {
+const SCRAPE_TIMEOUT_MS = 12000;
+const SCRAPE_MAX_BYTES = 1_500_000;
+const SCRAPE_MIN_TEXT = 400;
+
+function extractPage(html, limit) {
   const $ = loadHtml(html);
+  const siteName = String($('meta[property="og:site_name"]').attr('content') || '').replace(/\s+/g, ' ').trim();
+  const title = $('title').first().text().replace(/\s+/g, ' ').trim();
+  const description = String(
+    $('meta[name="description"]').attr('content')
+    || $('meta[property="og:description"]').attr('content')
+    || ''
+  ).replace(/\s+/g, ' ').trim();
+  const headings = [];
+  $('h1, h2').each((_, el) => {
+    const heading = $(el).text().replace(/\s+/g, ' ').trim();
+    if (heading && !headings.includes(heading)) headings.push(heading);
+  });
   $('script, style, noscript, svg').remove();
   $('p, div, h1, h2, h3, h4, li, tr, br, section, article').append(' ');
-  return $('body').text().replace(/\s+/g, ' ').trim().slice(0, 1500);
+  const text = $('body').text().replace(/\s+/g, ' ').trim().slice(0, limit);
+  return { title, description, siteName, headings: headings.slice(0, 12), text };
+}
+
+function visiblePageText(html) {
+  return extractPage(html, 1500).text;
+}
+
+function cleanCompanyName(value) {
+  const piece = String(value || '').replace(/\s+/g, ' ').trim();
+  if (piece.length < 2 || /^(home|welcome|index|untitled)$/i.test(piece)) return '';
+  return piece.slice(0, BUSINESS_LIMITS.company_name);
+}
+
+function companyFromTitle(title) {
+  const parts = String(title || '')
+    .split(/\s+\|\s+|\s+[-–—]\s+/)
+    .map((part) => cleanCompanyName(part))
+    .filter(Boolean);
+  if (!parts.length) return '';
+  const compact = parts.find((part) => part.length <= 40 && part.split(/\s+/).length <= 4);
+  return compact || parts[0];
+}
+
+function suggestCompanyName(extracted) {
+  return cleanCompanyName(extracted.siteName) || companyFromTitle(extracted.title);
+}
+
+function isPrivateIp(ip) {
+  const normalized = String(ip || '').toLowerCase().replace(/^\[|\]$/g, '');
+  if (normalized.startsWith('::ffff:')) return isPrivateIp(normalized.slice(7));
+  if (normalized.includes(':')) {
+    if (normalized === '::1' || normalized === '::') return true;
+    if (normalized.startsWith('fe80:')) return true;
+    return normalized.startsWith('fc') || normalized.startsWith('fd');
+  }
+  const parts = normalized.split('.').map((part) => Number(part));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return true;
+  const [a, b] = parts;
+  if (a === 0 || a === 10 || a === 127) return true;
+  if (a === 169 && b === 254) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true;
+  return false;
+}
+
+async function assertPublicHttpUrl(raw) {
+  let url;
+  try {
+    url = new URL(String(raw || '').trim());
+  } catch {
+    const error = new Error('Enter a valid http or https website.');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    const error = new Error('Only http and https websites can be scraped.');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (url.username || url.password) {
+    const error = new Error('Website addresses cannot include a username or password.');
+    error.statusCode = 400;
+    throw error;
+  }
+  const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  if (!host || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) {
+    const error = new Error('That website address is not allowed.');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (isIP(host)) {
+    if (isPrivateIp(host)) {
+      const error = new Error('That website address is not allowed.');
+      error.statusCode = 400;
+      throw error;
+    }
+  } else {
+    let records = [];
+    try {
+      records = await lookup(host, { all: true, verbatim: true });
+    } catch {
+      const error = new Error('Could not find that website.');
+      error.statusCode = 400;
+      throw error;
+    }
+    if (!records.length || records.some((record) => isPrivateIp(record.address))) {
+      const error = new Error('That website address is not allowed.');
+      error.statusCode = 400;
+      throw error;
+    }
+  }
+  return url;
+}
+
+async function readLimitedText(response) {
+  const reader = response.body?.getReader?.();
+  if (!reader) {
+    const text = await response.text();
+    return text.slice(0, SCRAPE_MAX_BYTES);
+  }
+  const chunks = [];
+  let received = 0;
+  while (received < SCRAPE_MAX_BYTES) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    received += value.byteLength;
+    chunks.push(Buffer.from(value));
+  }
+  try { await reader.cancel(); } catch { /* The extra bytes are discarded. */ }
+  return Buffer.concat(chunks).subarray(0, SCRAPE_MAX_BYTES).toString('utf8');
+}
+
+async function fetchPageHtml(startUrl) {
+  let current = startUrl;
+  for (let hop = 0; hop < 5; hop += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), SCRAPE_TIMEOUT_MS);
+    try {
+      const response = await fetch(current, {
+        redirect: 'manual',
+        signal: controller.signal,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; BusinessProfileBot/1.0)',
+          Accept: 'text/html,application/xhtml+xml',
+        },
+      });
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get('location');
+        await response.body?.cancel?.().catch(() => {});
+        if (!location) throw new Error('The website redirected without a destination.');
+        current = await assertPublicHttpUrl(new URL(location, current).toString());
+        continue;
+      }
+      if (!response.ok) throw new Error(`The website returned ${response.status}.`);
+      const length = Number(response.headers.get('content-length'));
+      if (Number.isFinite(length) && length > SCRAPE_MAX_BYTES) {
+        throw new Error('That page is too large to scrape.');
+      }
+      return await readLimitedText(response);
+    } catch (error) {
+      if (error.name === 'AbortError') throw new Error('The website took too long to respond.');
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw new Error('That website redirected too many times.');
+}
+
+async function launchBrowser(puppeteer) {
+  try {
+    return await puppeteer.launch({ headless: true, channel: 'chrome' });
+  } catch {
+    return puppeteer.launch({ headless: true });
+  }
+}
+
+async function renderPageHtml(target) {
+  const loaded = await import('puppeteer');
+  const puppeteer = loaded.default || loaded;
+  const browser = await launchBrowser(puppeteer);
+  try {
+    const page = await browser.newPage();
+    await page.setUserAgent('Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
+    await page.setRequestInterception(true);
+    page.on('request', async (request) => {
+      try {
+        const reqUrl = request.url();
+        if (request.isNavigationRequest() && (reqUrl.startsWith('http://') || reqUrl.startsWith('https://'))) {
+          await assertPublicHttpUrl(reqUrl);
+        }
+        await request.continue();
+      } catch {
+        await request.abort().catch(() => {});
+      }
+    });
+    await page.goto(target.toString(), { waitUntil: 'domcontentloaded', timeout: 15000 });
+    await assertPublicHttpUrl(page.url());
+    return await page.content();
+  } finally {
+    await browser.close();
+  }
+}
+
+function knowledgeFromPage(extracted) {
+  const parts = [];
+  if (extracted.title) parts.push(`Title: ${extracted.title}`);
+  if (extracted.description) parts.push(`Description: ${extracted.description}`);
+  if (extracted.headings.length) parts.push(`Headings: ${extracted.headings.join(' | ')}`);
+  if (extracted.text) parts.push(extracted.text);
+  let knowledge = parts.join('\n').trim();
+  let trimmed = false;
+  if (knowledge.length > BUSINESS_LIMITS.website_knowledge) {
+    knowledge = knowledge.slice(0, BUSINESS_LIMITS.website_knowledge).trim();
+    trimmed = true;
+  }
+  return { knowledge, trimmed };
+}
+
+async function scrapeWebsite(rawUrl) {
+  let value = String(rawUrl || '').trim();
+  if (!value) {
+    const error = new Error('Enter a website address.');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(value)) value = `https://${value}`;
+  const url = await assertPublicHttpUrl(value);
+
+  let warning = '';
+  let html = '';
+  let fetchError = null;
+  try {
+    html = await fetchPageHtml(url);
+  } catch (error) {
+    fetchError = error;
+  }
+
+  let extracted = html
+    ? extractPage(html, BUSINESS_LIMITS.website_knowledge)
+    : { title: '', siteName: '', description: '', headings: [], text: '' };
+
+  if (extracted.text.length < SCRAPE_MIN_TEXT) {
+    try {
+      const rendered = extractPage(await renderPageHtml(url), BUSINESS_LIMITS.website_knowledge);
+      if (rendered.text.length > extracted.text.length) extracted = rendered;
+    } catch (error) {
+      if (!extracted.text && !extracted.title && !extracted.description) {
+        throw fetchError || error;
+      }
+      warning = 'Only part of the page could be read.';
+    }
+  }
+
+  const { knowledge, trimmed } = knowledgeFromPage(extracted);
+  if (!knowledge) {
+    const error = new Error(fetchError?.message || 'No readable text was found on that page.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return {
+    title: extracted.title,
+    description: extracted.description,
+    knowledge,
+    trimmed,
+    warning,
+    suggested_name: suggestCompanyName(extracted),
+    suggested_about: extracted.description.slice(0, BUSINESS_LIMITS.about),
+  };
 }
 
 function parseToolArguments(raw) {
@@ -562,8 +880,15 @@ async function handleUserMessage(chatId, userMessage, channel) {
   const request = { aborted: false, abortController: new AbortController() };
   activeRequests[chatId] = request;
 
+  let systemPrompt = buildSystemPrompt(DEFAULT_BUSINESS_PROFILE);
+  try {
+    systemPrompt = buildSystemPrompt(await getBusinessProfile());
+  } catch {
+    // A missing profile still leaves the default business facts in place.
+  }
+
   if (!chatHistories[chatId]) {
-    chatHistories[chatId] = [{ role: 'system', content: SYSTEM_PROMPT }];
+    chatHistories[chatId] = [{ role: 'system', content: systemPrompt }];
     try {
       const pastMessages = await getChatHistory(chatId);
       for (const message of pastMessages) {
@@ -588,9 +913,9 @@ async function handleUserMessage(chatId, userMessage, channel) {
           lead.insights && `Notes:\n${lead.insights}`,
         ].filter(Boolean).join('\n')
       : 'No context yet.';
-    chatHistories[chatId][0].content = `${SYSTEM_PROMPT}\n\nCLIENT CONTEXT SUMMARY (private, never quote the score to the customer):\n${contextStr || 'No context yet.'}`;
+    chatHistories[chatId][0].content = `${systemPrompt}\n\nCLIENT CONTEXT SUMMARY (private, never quote the score to the customer):\n${contextStr || 'No context yet.'}`;
   } catch {
-    // Context is optional; the reply can still proceed.
+    chatHistories[chatId][0].content = systemPrompt;
   }
 
   chatHistories[chatId].push({ role: 'user', content: userMessage });

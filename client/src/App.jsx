@@ -1,10 +1,11 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Sidebar from './components/Sidebar.jsx';
 import Overview from './components/Overview.jsx';
 import ChatPanel from './components/ChatPanel.jsx';
 import HistoryPanel from './components/HistoryPanel.jsx';
 import LeadsPanel from './components/LeadsPanel.jsx';
 import InboxPanel from './components/InboxPanel.jsx';
+import BusinessPanel from './components/BusinessPanel.jsx';
 import { useWebSocket } from './hooks/useWebSocket.js';
 
 const TITLES = {
@@ -13,12 +14,31 @@ const TITLES = {
   chat: ['Live Chat', 'Talk to the assistant and reply to Telegram threads'],
   history: ['Chat History', 'Every saved website and Telegram conversation'],
   leads: ['Leads', 'Profiles the assistant has collected'],
+  business: ['Business', 'Company facts the assistant can use'],
 };
 
 export default function App() {
   const listeners = useRef(new Set());
   const [section, setSection] = useState('inbox');
   const [focusChatId, setFocusChatId] = useState(null);
+  const [companyName, setCompanyName] = useState('Pixbit Solutions');
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/settings')
+      .then((response) => response.json())
+      .then((data) => {
+        if (!cancelled && data?.company_name) setCompanyName(data.company_name);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    document.title = `${companyName} — Dashboard`;
+  }, [companyName]);
 
   const subscribe = useCallback((listener) => {
     listeners.current.add(listener);
@@ -38,7 +58,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <Sidebar section={section} onSection={setSection} status={status} />
+      <Sidebar section={section} onSection={setSection} status={status} companyName={companyName} />
       <div className="workspace">
         <header className="topbar">
           <div>
@@ -63,6 +83,7 @@ export default function App() {
           )}
           {section === 'history' && <HistoryPanel subscribe={subscribe} onOpenChat={openChat} />}
           {section === 'leads' && <LeadsPanel subscribe={subscribe} onOpenChat={openChat} />}
+          {section === 'business' && <BusinessPanel onSaved={(profile) => setCompanyName(profile.company_name)} />}
         </main>
       </div>
     </div>

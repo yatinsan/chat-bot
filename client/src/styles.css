@@ -52,6 +52,12 @@ button { cursor: pointer; }
 }
 
 .brand strong { display: block; font-size: 15px; }
+.sidebar .brand strong {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .brand small { color: var(--muted); font-size: 12px; }
 
 .brand-mark {
@@ -355,6 +361,36 @@ button { cursor: pointer; }
   color: var(--danger);
   font-size: 13px;
 }
+.banner.ok {
+  background: rgba(61, 220, 132, 0.1);
+  color: #8ee0ad;
+}
+
+.business-page { overflow: auto; }
+.business-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 760px;
+  padding: 4px 16px 18px;
+}
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field span { color: var(--muted); font-size: 13px; }
+.field input, .field textarea {
+  width: 100%;
+  background: #0c0c0c;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px;
+  outline: none;
+}
+.field textarea { resize: vertical; min-height: 96px; }
+.field textarea.tall { min-height: 180px; }
+.field input:focus, .field textarea:focus { border-color: var(--line-strong); }
+.website-row { display: flex; gap: 8px; align-items: center; }
+.website-row input { flex: 1; min-width: 0; }
+.form-actions { display: flex; gap: 8px; align-items: center; }
+.form-note { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
 
 .lead-grid {
   display: grid;
@@ -492,12 +528,15 @@ button { cursor: pointer; }
   .app { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
   .sidebar { border-right: 0; border-bottom: 1px solid var(--line); padding: 12px; gap: 12px; }
   .nav { flex-direction: row; overflow: auto; }
+  .nav-item { flex: 0 0 auto; white-space: nowrap; }
   .sidebar-foot, .brand small { display: none; }
   .stat-grid, .split:not(.inbox) { grid-template-columns: 1fr; }
   .split:not(.inbox) { height: auto; }
   .split:not(.inbox) .conv-list { max-height: 280px; }
   .chat-pane { min-height: 70vh; }
   .content, .topbar { padding-left: 16px; padding-right: 16px; }
+  .website-row { flex-direction: column; align-items: stretch; }
+  .sidebar .brand strong { max-width: 120px; }
 }
 
 @media (max-width: 1100px) {
