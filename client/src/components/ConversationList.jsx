@@ -1,4 +1,5 @@
 import { chatLabel, channelOf, formatDateTime, scoreBand } from '../lib/format.js';
+import TagChips from './TagChips.jsx';
 
 export default function ConversationList({ chats, selectedId, onSelect, query, onQuery, action, loading }) {
   const needle = query.trim().toLowerCase();
@@ -46,6 +47,7 @@ export default function ConversationList({ chats, selectedId, onSelect, query, o
               )}
               <span>{chat.message_count} messages</span>
             </div>
+            {chat.tags?.length > 0 && <div className="conv-tags"><TagChips tags={chat.tags} /></div>}
           </button>
         ))}
       </div>

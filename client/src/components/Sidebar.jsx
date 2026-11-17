@@ -1,5 +1,6 @@
 const ITEMS = [
   { id: 'inbox', label: 'Inbox', icon: 'inbox' },
+  { id: 'meetings', label: 'Meetings', icon: 'calendar' },
   { id: 'overview', label: 'Overview', icon: 'grid' },
   { id: 'chat', label: 'Live Chat', icon: 'chat' },
   { id: 'history', label: 'History', icon: 'clock' },
@@ -8,6 +9,14 @@ const ITEMS = [
 ];
 
 function Icon({ name }) {
+  if (name === 'calendar') {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="4" y="5.5" width="16" height="14.5" rx="2" />
+        <path d="M4 10h16M8.5 3.5v4M15.5 3.5v4" />
+      </svg>
+    );
+  }
   if (name === 'inbox') {
     return (
       <svg viewBox="0 0 24 24" aria-hidden="true">

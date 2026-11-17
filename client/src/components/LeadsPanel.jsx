@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { chatLabel, formatDateTime, scoreBand } from '../lib/format.js';
+import TagChips from './TagChips.jsx';
 
 export default function LeadsPanel({ subscribe, onOpenChat }) {
   const [leads, setLeads] = useState([]);
@@ -63,6 +64,7 @@ export default function LeadsPanel({ subscribe, onOpenChat }) {
                 <time>{formatDateTime(lead.updated_at)}</time>
               </div>
               <h2>{chatLabel(lead)}</h2>
+              <TagChips tags={lead.tags} />
               <p className="contact">{lead.contact || 'No contact yet'}</p>
               {lead.stack && <p className="meeting">Stack · {lead.stack}</p>}
               {lead.meeting_time && <p className="meeting">Meeting · {lead.meeting_time}</p>}

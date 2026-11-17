@@ -6,12 +6,15 @@ import HistoryPanel from './components/HistoryPanel.jsx';
 import LeadsPanel from './components/LeadsPanel.jsx';
 import InboxPanel from './components/InboxPanel.jsx';
 import BusinessPanel from './components/BusinessPanel.jsx';
+import MeetingsPanel from './components/MeetingsPanel.jsx';
 import { useWebSocket } from './hooks/useWebSocket.js';
+import './meetings.css';
 
 const TITLES = {
   inbox: ['Inbox', 'Each chat, what they need, and who to contact'],
+  meetings: ['Meetings', 'Call requests from customers, waiting for your decision'],
   overview: ['Overview', 'Leads, conversations, and live activity'],
-  chat: ['Live Chat', 'Talk to the assistant and reply to Telegram threads'],
+  chat: ['Live Chat', 'Reply to a customer as the team, or test the assistant in a new chat'],
   history: ['Chat History', 'Every saved website and Telegram conversation'],
   leads: ['Leads', 'Profiles the assistant has collected'],
   business: ['Business', 'Company facts the assistant can use'],
@@ -72,6 +75,7 @@ export default function App() {
         </header>
         <main className="content">
           {section === 'inbox' && <InboxPanel subscribe={subscribe} />}
+          {section === 'meetings' && <MeetingsPanel subscribe={subscribe} onOpenChat={openChat} />}
           {section === 'overview' && <Overview subscribe={subscribe} onOpenChat={openChat} />}
           {section === 'chat' && (
             <ChatPanel

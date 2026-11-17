@@ -50,6 +50,21 @@ export async function initDB() {
     )
   `);
 
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS meetings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      chat_id TEXT NOT NULL,
+      preferred_text TEXT NOT NULL,
+      preferred_at TEXT,
+      timezone TEXT,
+      note TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      proposed_text TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      decided_at DATETIME
+    )
+  `);
+
   console.log('📦 Database initialized (Iterative Leads & Chat History).');
 }
 
@@ -170,9 +185,99 @@ export async function upsertLead(chatId, data) {
   );
 }
 
+// Per-chat meeting counts, used to derive tags without storing them.
+const MEETING_COUNTS_SQL = (chatExpr) => `
+      (SELECT COUNT(*) FROM meetings m WHERE m.chat_id = ${chatExpr}) AS meeting_requests,
+      (SELECT COUNT(*) FROM meetings m WHERE m.chat_id = ${chatExpr} AND m.status IN ('pending', 'countered')) AS pending_meetings,
+      (SELECT COUNT(*) FROM meetings m WHERE m.chat_id = ${chatExpr} AND m.status = 'confirmed') AS confirmed_meetings`;
+
+// Tags are derived on every read so they can never drift from the data.
+export function tagsFor(row) {
+  const tags = [];
+  if (Number(row.meeting_requests) > 0) tags.push('wants_meeting');
+  if (Number(row.pending_meetings) > 0) tags.push('pending_approval');
+  if (Number(row.confirmed_meetings) > 0) tags.push('meeting_confirmed');
+  if (Number(row.lead_score) >= 7) tags.push('hot_lead');
+  return tags;
+}
+
+function withTags(row) {
+  return { ...row, tags: tagsFor(row) };
+}
+
 export async function getEnquiries() {
   if (!db) await initDB();
-  return await db.all('SELECT * FROM leads ORDER BY updated_at DESC');
+  const rows = await db.all(
+    `SELECT l.*, ${MEETING_COUNTS_SQL('l.chat_id')} FROM leads l ORDER BY l.updated_at DESC`
+  );
+  return rows.map(withTags);
+}
+
+export async function createMeeting(chatId, fields) {
+  if (!db) await initDB();
+  const result = await db.run(
+    `INSERT INTO meetings (chat_id, preferred_text, preferred_at, timezone, note, status)
+     VALUES (?, ?, ?, ?, ?, 'pending')`,
+    [chatId.toString(), fields.preferred_text, fields.preferred_at ?? null, fields.timezone ?? null, fields.note ?? null]
+  );
+  return getMeeting(result.lastID);
+}
+
+export async function getMeeting(id) {
+  if (!db) await initDB();
+  return db.get('SELECT * FROM meetings WHERE id = ?', [Number(id)]);
+}
+
+export async function getOpenMeetingForChat(chatId) {
+  if (!db) await initDB();
+  return db.get(
+    "SELECT * FROM meetings WHERE chat_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1",
+    [chatId.toString()]
+  );
+}
+
+export async function updateMeetingRequest(id, fields) {
+  if (!db) await initDB();
+  await db.run(
+    'UPDATE meetings SET preferred_text = ?, preferred_at = ?, timezone = ?, note = COALESCE(?, note) WHERE id = ?',
+    [fields.preferred_text, fields.preferred_at ?? null, fields.timezone ?? null, fields.note ?? null, Number(id)]
+  );
+  return getMeeting(id);
+}
+
+export async function decideMeeting(id, status, proposedText = null) {
+  if (!db) await initDB();
+  await db.run(
+    'UPDATE meetings SET status = ?, proposed_text = ?, decided_at = CURRENT_TIMESTAMP WHERE id = ?',
+    [status, proposedText, Number(id)]
+  );
+  return getMeeting(id);
+}
+
+// A request is flagged when another open or confirmed meeting has the exact same start time.
+export async function listMeetings() {
+  if (!db) await initDB();
+  const rows = await db.all(`
+    SELECT
+      m.*,
+      l.name,
+      l.contact,
+      l.service,
+      EXISTS (
+        SELECT 1 FROM meetings o
+        WHERE o.id != m.id
+          AND o.preferred_at IS NOT NULL
+          AND o.preferred_at = m.preferred_at
+          AND o.status IN ('pending', 'countered', 'confirmed')
+      ) AS conflict
+    FROM meetings m
+    LEFT JOIN leads l ON l.chat_id = m.chat_id
+    ORDER BY
+      CASE m.status WHEN 'pending' THEN 0 WHEN 'countered' THEN 1 ELSE 2 END,
+      m.created_at DESC,
+      m.id DESC
+  `);
+  return rows.map((row) => ({ ...row, conflict: Boolean(row.conflict) }));
 }
 
 export async function getLead(chatId) {
@@ -186,6 +291,7 @@ export async function deleteChat(chatId) {
   await db.exec('BEGIN');
   try {
     await db.run('DELETE FROM messages WHERE chat_id = ?', [id]);
+    await db.run('DELETE FROM meetings WHERE chat_id = ?', [id]);
     await db.run('DELETE FROM leads WHERE chat_id = ?', [id]);
     await db.exec('COMMIT');
   } catch (error) {
@@ -213,7 +319,7 @@ export async function getChatHistory(chatId) {
 
 export async function listChats() {
   if (!db) await initDB();
-  return db.all(`
+  const rows = await db.all(`
     SELECT
       chats.chat_id,
       l.name,
@@ -224,6 +330,7 @@ export async function listChats() {
       l.meeting_time,
       l.lead_score,
       l.score_reason,
+      ${MEETING_COUNTS_SQL('chats.chat_id')},
       chats.message_count,
       last.content AS last_message,
       last.role AS last_role,
@@ -237,6 +344,7 @@ export async function listChats() {
     LEFT JOIN leads l ON l.chat_id = chats.chat_id
     ORDER BY chats.last_id DESC
   `);
+  return rows.map(withTags);
 }
 
 export async function getStats() {
@@ -246,6 +354,7 @@ export async function getStats() {
       (SELECT COUNT(*) FROM leads) AS leads,
       (SELECT COUNT(*) FROM messages) AS messages,
       (SELECT COUNT(DISTINCT chat_id) FROM messages) AS chats,
-      (SELECT COUNT(*) FROM leads WHERE meeting_time IS NOT NULL AND TRIM(meeting_time) != '') AS meetings
+      (SELECT COUNT(*) FROM meetings WHERE status = 'confirmed') AS meetings,
+      (SELECT COUNT(*) FROM meetings WHERE status IN ('pending', 'countered')) AS pending_meetings
   `);
 }

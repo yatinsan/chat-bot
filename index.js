@@ -9,7 +9,34 @@ import TelegramBot from 'node-telegram-bot-api';
 import dotenv from 'dotenv';
 import express from 'express';
 import { load as loadHtml } from 'cheerio';
-import { initDB, upsertLead, getEnquiries, saveMessage, getChatHistory, getLead, listChats, getStats, deleteChat, getBusinessProfile, saveBusinessProfile, DEFAULT_BUSINESS_PROFILE, BUSINESS_LIMITS } from './database.js';
+import { initDB, upsertLead, getEnquiries, saveMessage, getChatHistory, getLead, listChats, getStats, deleteChat, getBusinessProfile, saveBusinessProfile, DEFAULT_BUSINESS_PROFILE, BUSINESS_LIMITS, createMeeting, getMeeting, getOpenMeetingForChat, updateMeetingRequest, decideMeeting, listMeetings } from './database.js';
+
+// Meetings are proposed in the customer's local time. One zone for the whole business.
+const BUSINESS_TZ = 'Asia/Dubai';
+
+// Today's date in the business zone, with the year, e.g. "Tuesday 2026-11-17".
+function businessToday() {
+  const now = new Date();
+  const date = new Intl.DateTimeFormat('en-CA', { timeZone: BUSINESS_TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+  const weekday = new Intl.DateTimeFormat('en-GB', { timeZone: BUSINESS_TZ, weekday: 'long' }).format(now);
+  return `${weekday} ${date}`;
+}
+
+function formatBusinessTime(iso, options = {}) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: BUSINESS_TZ,
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+    ...options,
+  }).format(date);
+}
 
 // Load environment variables
 dotenv.config();
@@ -50,6 +77,8 @@ function buildSystemPrompt(profile) {
   const services = profile.services.trim();
   const prompt = `
 You text customers for ${fullName} in ${profile.location} (${profile.website}) the way a business development manager would. Speak as "we" for ${name}. You are warm and specific. You are not a form, and you do not sound like a script.
+
+TODAY: ${businessToday()} (business time zone ${BUSINESS_TZ}). Use this to work out dates like "Friday" or "next week", and always use this year.
 
 What you can talk about:
 ${services}
@@ -104,7 +133,10 @@ WEBSITES:
 
 MEETING:
 - A call or meeting comes before you ask how to reach them.
-- When they agree, ask what time works. When they give a time, save meeting_time and say you will check with the team. Do not say the slot is booked.
+- When they agree to a call, ask: are you okay with a date, or what time works for you? Do not offer a list of open slots.
+- When they give a day or time, call requestMeeting with preferred_text (their words) and, when you can work out the exact date, preferred_at as ISO 8601 with the +04:00 offset. Then send one short message saying you will discuss it with the team and get back to them.
+- Never say the meeting is booked, confirmed, approved, or fixed. Only the team confirms it, and they will message the customer.
+- If the customer changes the time before it is confirmed, call requestMeeting again with the new time.
 - Ask for a name and a phone or email after the call is the plan, not before.
 
 STOP:
@@ -208,6 +240,64 @@ app.delete('/api/leads/:chatId', async (req, res) => {
   }
 });
 
+app.get('/api/meetings', async (_req, res) => {
+  try {
+    res.json(await listMeetings());
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Team decision on a meeting request. The customer is told right away in the same chat.
+app.post('/api/meetings/:id/decision', async (req, res) => {
+  try {
+    const meeting = await getMeeting(req.params.id);
+    if (!meeting) {
+      res.status(404).json({ error: 'Meeting request not found.' });
+      return;
+    }
+    if (!['pending', 'countered'].includes(meeting.status)) {
+      res.status(409).json({ error: `This request is already ${meeting.status}.` });
+      return;
+    }
+
+    const decision = String(req.body?.decision || '');
+    const when = meeting.preferred_at ? formatBusinessTime(meeting.preferred_at) : meeting.preferred_text;
+    let status;
+    let text;
+    let proposed = null;
+
+    if (decision === 'approve') {
+      status = 'confirmed';
+      text = `Great, we're on for ${when}. We'll see you then.`;
+    } else if (decision === 'reject') {
+      status = 'rejected';
+      text = "Sorry, that time doesn't work on our side. Could you share another day or time that suits you?";
+    } else if (decision === 'counter') {
+      proposed = String(req.body?.proposed_text || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+      if (!proposed) {
+        res.status(400).json({ error: 'Type the time you want to suggest.' });
+        return;
+      }
+      status = 'countered';
+      text = `How about ${proposed}? Let us know if that works for you.`;
+    } else {
+      res.status(400).json({ error: 'decision must be approve, reject, or counter.' });
+      return;
+    }
+
+    await sendTeamMessage(meeting.chat_id, text);
+    await decideMeeting(meeting.id, status, proposed);
+    const updated = await getMeeting(meeting.id);
+    broadcast({ type: 'meeting', meeting: updated });
+    const lead = await getLead(meeting.chat_id);
+    if (lead) broadcast({ type: 'lead', lead });
+    res.json(updated);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 const server = createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
@@ -295,11 +385,26 @@ const AI_TOOLS = [
           insights: { type: 'string', description: 'A short, useful note/insight from the latest message (e.g., "Wants a mobile app", "Budget customer")' },
           service: { type: 'string', description: 'What they want built: website, mobile app, or both' },
           stack: { type: 'string', description: 'Tech stack, platform, or main features they mentioned' },
-          meeting_time: { type: 'string', description: 'The time they prefer for a meeting with the tech team' },
           lead_score: { type: 'number', description: 'Private 1-10 score for how real this client feels. Never show this to the customer.' },
           score_reason: { type: 'string', description: 'One private line explaining the score. Never send this to the customer.' }
         },
         required: []
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'requestMeeting',
+      description: 'Records a call or meeting day/time the customer proposed. The team approves or rejects it later. Call this only when the customer gives a day or time. Never confirm the meeting to the customer.',
+      parameters: {
+        type: 'object',
+        properties: {
+          preferred_text: { type: 'string', description: 'What the customer said, in their words, e.g. "Friday 4 PM"' },
+          preferred_at: { type: 'string', description: 'Exact date and time as ISO 8601 with the +04:00 offset, only when you can work it out from TODAY' },
+          note: { type: 'string', description: 'Short private note, e.g. "wants to talk pricing"' }
+        },
+        required: ['preferred_text']
       }
     }
   }
@@ -818,14 +923,57 @@ function setTyping(chatId, active) {
   broadcast({ type: 'typing', chatId, active });
 }
 
-async function deliverAssistantMessage(chatId, text, channel) {
-  const saved = await saveMessage(chatId, 'assistant', text);
+async function deliverAssistantMessage(chatId, text, channel, role = 'assistant') {
+  const saved = await saveMessage(chatId, role, text);
   broadcast({ type: 'message', message: saved });
   if (channel === 'telegram') {
     if (!bot) throw new Error('Telegram bot is not configured');
     await bot.sendMessage(chatId, text);
   }
   return saved;
+}
+
+function channelFor(chatId) {
+  return String(chatId).startsWith('web-') ? 'web' : 'telegram';
+}
+
+// A message written by the team (admin reply or meeting decision). It is shown
+// to the customer, and the assistant sees it as its own earlier message.
+async function sendTeamMessage(chatId, text) {
+  const id = String(chatId);
+  const saved = await deliverAssistantMessage(id, text, channelFor(id), 'admin');
+  if (chatHistories[id]) chatHistories[id].push({ role: 'assistant', content: text });
+  return saved;
+}
+
+// Saves a meeting the customer proposed. A pending request for the same chat is
+// updated in place, so a changed time does not create a duplicate.
+async function createMeetingRequest(chatId, args = {}) {
+  const preferredText = String(args.preferred_text || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+  let preferredAt = null;
+  if (args.preferred_at) {
+    const date = new Date(args.preferred_at);
+    if (!Number.isNaN(date.getTime())) preferredAt = date.toISOString();
+  }
+  if (!preferredText && !preferredAt) throw new Error('preferred_text is required');
+
+  const fields = {
+    preferred_text: preferredText || formatBusinessTime(preferredAt),
+    preferred_at: preferredAt,
+    timezone: BUSINESS_TZ,
+    note: String(args.note || '').replace(/\s+/g, ' ').trim().slice(0, 300) || null,
+  };
+
+  const open = await getOpenMeetingForChat(chatId);
+  const meeting = open
+    ? await updateMeetingRequest(open.id, fields)
+    : await createMeeting(chatId, fields);
+
+  await upsertLead(chatId, { meeting_time: meeting.preferred_text });
+  const lead = await getLead(chatId);
+  if (lead) broadcast({ type: 'lead', lead });
+  broadcast({ type: 'meeting', meeting });
+  return meeting;
 }
 
 function rememberDeliveredBubbles(history, texts, checkpoint) {
@@ -892,7 +1040,9 @@ async function handleUserMessage(chatId, userMessage, channel) {
     try {
       const pastMessages = await getChatHistory(chatId);
       for (const message of pastMessages) {
-        chatHistories[chatId].push({ role: message.role, content: message.content });
+        // Team messages are stored as role 'admin'; the model only knows user and assistant.
+        const role = message.role === 'admin' ? 'assistant' : message.role;
+        chatHistories[chatId].push({ role, content: message.content });
       }
     } catch (error) {
       console.error('Error loading chat history:', error.message);
@@ -983,6 +1133,18 @@ async function handleUserMessage(chatId, userMessage, channel) {
             if (request.aborted || error.name === 'AbortError') throw new Error('ABORTED');
             toolResultText = JSON.stringify({ error: error.message });
           }
+        } else if (fn.name === 'requestMeeting') {
+          try {
+            const meeting = await createMeetingRequest(chatId, fn.arguments);
+            toolResultText = JSON.stringify({
+              status: 'Meeting request saved as pending.',
+              requested: meeting.preferred_text,
+              instruction: 'Tell the customer you will discuss it with the team and get back to them. Do not confirm the time.',
+            });
+            console.log(`\n[Database] Meeting request #${meeting.id} for chat ${chatId}`);
+          } catch (error) {
+            toolResultText = JSON.stringify({ error: error.message });
+          }
         } else if (fn.name === 'updateClientContext') {
           try {
             await upsertLead(chatId, fn.arguments);
@@ -1070,6 +1232,19 @@ wss.on('connection', (socket) => {
     } catch {
       return;
     }
+    // The team's reply: saved and delivered as the business, never sent to the AI.
+    if (data.type === 'admin_reply') {
+      const chatId = String(data.chatId || '');
+      const content = String(data.content || '').trim();
+      if (!chatId || !content) return;
+      try {
+        await sendTeamMessage(chatId, content);
+      } catch (error) {
+        sendTo(socket, { type: 'error', message: error.message });
+      }
+      return;
+    }
+
     if (data.type !== 'send') return;
 
     const content = String(data.content || '').trim();

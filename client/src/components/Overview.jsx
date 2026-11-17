@@ -25,14 +25,15 @@ export default function Overview({ subscribe, onOpenChat }) {
   }, [load]);
 
   useEffect(() => subscribe((event) => {
-    if (event.type === 'message' || event.type === 'lead' || event.type === 'lead_deleted') load();
+    if (event.type === 'message' || event.type === 'lead' || event.type === 'lead_deleted' || event.type === 'meeting') load();
   }), [subscribe, load]);
 
   const cards = [
     { label: 'Conversations', value: stats.chats },
     { label: 'Messages', value: stats.messages },
     { label: 'Leads', value: stats.leads },
-    { label: 'Meetings', value: stats.meetings },
+    { label: 'Meetings booked', value: stats.meetings },
+    { label: 'Awaiting your decision', value: stats.pending_meetings },
   ];
 
   return (

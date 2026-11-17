@@ -104,8 +104,16 @@ export default function ChatPanel({ subscribe, send, status, initialChatId }) {
       return;
     }
 
-    const chatId = selectedId || `web-${crypto.randomUUID()}`;
-    if (!selectedId) selectChat(chatId);
+    // In an existing chat the text is the team's reply. In a new chat it is a test message to the assistant.
+    if (selectedId) {
+      setDraft('');
+      setError('');
+      send({ type: 'admin_reply', chatId: selectedId, content });
+      return;
+    }
+
+    const chatId = `web-${crypto.randomUUID()}`;
+    selectChat(chatId);
     setDraft('');
     setError('');
     send({ type: 'send', chatId, content });
@@ -139,7 +147,7 @@ export default function ChatPanel({ subscribe, send, status, initialChatId }) {
           <textarea
             rows={2}
             value={draft}
-            placeholder={selectedId && !String(selectedId).startsWith('web-') ? 'Reply on Telegram…' : 'Message the assistant…'}
+            placeholder={selectedId ? 'Reply as the team…' : 'Test the assistant as a new customer…'}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey) {

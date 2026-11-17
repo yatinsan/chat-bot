@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import ConversationList from './ConversationList.jsx';
 import MessageThread from './MessageThread.jsx';
+import MeetingCard from './MeetingCard.jsx';
+import TagChips from './TagChips.jsx';
 import { channelOf, chatLabel, contactHref, formatDateTime, scoreBand } from '../lib/format.js';
 
 function sortChats(chats) {
@@ -15,6 +17,7 @@ function sortChats(chats) {
 export default function InboxPanel({ subscribe }) {
   const [chats, setChats] = useState([]);
   const [leads, setLeads] = useState([]);
+  const [meetings, setMeetings] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
   const [messages, setMessages] = useState([]);
   const [query, setQuery] = useState('');
@@ -23,13 +26,21 @@ export default function InboxPanel({ subscribe }) {
 
   const load = useCallback(async () => {
     try {
-      const [chatsRes, leadsRes] = await Promise.all([fetch('/api/chats'), fetch('/api/enquiries')]);
+      const [chatsRes, leadsRes, meetingsRes] = await Promise.all([
+        fetch('/api/chats'),
+        fetch('/api/enquiries'),
+        fetch('/api/meetings'),
+      ]);
       const chatsData = await chatsRes.json();
       const leadsData = await leadsRes.json();
-      if (!chatsRes.ok || !leadsRes.ok) throw new Error(chatsData.error || leadsData.error || 'Request failed');
+      const meetingsData = await meetingsRes.json();
+      if (!chatsRes.ok || !leadsRes.ok || !meetingsRes.ok) {
+        throw new Error(chatsData.error || leadsData.error || meetingsData.error || 'Request failed');
+      }
       const nextChats = sortChats(Array.isArray(chatsData) ? chatsData : []);
       setChats(nextChats);
       setLeads(Array.isArray(leadsData) ? leadsData : []);
+      setMeetings(Array.isArray(meetingsData) ? meetingsData : []);
       setSelectedId((current) => current || nextChats[0]?.chat_id || null);
       setError('');
     } catch (err) {
@@ -67,7 +78,7 @@ export default function InboxPanel({ subscribe }) {
       setSelectedId(null);
       setMessages([]);
     }
-    if (event.type === 'message' || event.type === 'lead' || event.type === 'lead_deleted') load();
+    if (event.type === 'message' || event.type === 'lead' || event.type === 'lead_deleted' || event.type === 'meeting') load();
     if (event.type === 'message' && String(event.message.chat_id) === String(selectedId)) {
       setMessages((prev) => (
         prev.some((message) => message.id === event.message.id) ? prev : [...prev, event.message]
@@ -79,6 +90,7 @@ export default function InboxPanel({ subscribe }) {
   const lead = leads.find((item) => String(item.chat_id) === String(selectedId)) || active;
   const score = Number(lead?.lead_score) || 0;
   const contact = contactHref(lead?.contact);
+  const chatMeetings = meetings.filter((meeting) => String(meeting.chat_id) === String(selectedId));
 
   return (
     <section className="split inbox">
@@ -115,6 +127,7 @@ export default function InboxPanel({ subscribe }) {
           <p className="empty-inline">Select a chat to see the brief.</p>
         ) : (
           <div className="requirement-body">
+            <TagChips tags={lead?.tags} />
             {score > 0 ? (
               <p className="score-reason">{lead?.score_reason || 'Scored from the conversation.'}</p>
             ) : (
@@ -126,7 +139,14 @@ export default function InboxPanel({ subscribe }) {
             <p>{lead?.stack || 'Not captured yet'}</p>
             <h3>Notes</h3>
             <p className="notes">{lead?.insights || 'No notes yet.'}</p>
-            {lead?.meeting_time && <p className="meeting">Meeting · {lead.meeting_time}</p>}
+            {chatMeetings.length > 0 && (
+              <>
+                <h3>Meeting requests</h3>
+                {chatMeetings.map((meeting) => (
+                  <MeetingCard key={meeting.id} meeting={meeting} onDecided={load} />
+                ))}
+              </>
+            )}
             <h3>Contact</h3>
             {contact ? (
               <>

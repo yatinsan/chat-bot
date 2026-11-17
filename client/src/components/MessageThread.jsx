@@ -20,8 +20,10 @@ export default function MessageThread({ messages, typing, emptyText = 'No messag
     <div className="thread">
       {messages.map((message) => {
         const mine = message.role === 'user';
+        const team = message.role === 'admin';
         return (
-          <article key={message.id} className={mine ? 'bubble mine' : 'bubble'}>
+          <article key={message.id} className={mine ? 'bubble mine' : team ? 'bubble team' : 'bubble'}>
+            {team && <span className="team-label">Team</span>}
             <p>{message.content}</p>
             <time>{formatTime(message.created_at)}</time>
           </article>
