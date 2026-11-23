@@ -1,11 +1,13 @@
 import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
+import { DEFAULT_TIMEZONE, isValidTimeZone } from './server/time.js';
 
 let db;
 
-export async function initDB() {
+// DATABASE_PATH lets tests use a throwaway file (or ':memory:').
+export async function initDB(filename = process.env.DATABASE_PATH || './database.sqlite') {
   db = await open({
-    filename: './database.sqlite',
+    filename,
     driver: sqlite3.Database
   });
 
@@ -50,6 +52,10 @@ export async function initDB() {
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
+  const profileColumns = new Set((await db.all('PRAGMA table_info(business_profile)')).map((column) => column.name));
+  if (!profileColumns.has('timezone')) {
+    await db.exec(`ALTER TABLE business_profile ADD COLUMN timezone TEXT NOT NULL DEFAULT '${DEFAULT_TIMEZONE}'`);
+  }
 
   await db.exec(`
     CREATE TABLE IF NOT EXISTS meetings (
@@ -78,6 +84,12 @@ export async function initDB() {
   console.log('📦 Database initialized (Iterative Leads & Chat History).');
 }
 
+export async function closeDB() {
+  if (!db) return;
+  await db.close();
+  db = undefined;
+}
+
 export const BUSINESS_LIMITS = {
   company_name: 120,
   location: 120,
@@ -94,10 +106,19 @@ export const DEFAULT_BUSINESS_PROFILE = {
   services: '- Websites\n- Mobile apps (Android and iOS)\n- SEO, digital marketing, and branding',
   about: '',
   website_knowledge: '',
+  timezone: DEFAULT_TIMEZONE,
 };
 
 function cleanProfileText(value, max) {
   return String(value ?? '').replace(/\u0000/g, '').trim().slice(0, max);
+}
+
+// An IANA zone such as "Asia/Dubai". Missing means the default; anything else must be a real zone.
+function normalizeTimeZone(value) {
+  if (value == null || String(value).trim() === '') return DEFAULT_TIMEZONE;
+  const zone = String(value).trim();
+  if (!isValidTimeZone(zone)) throw new Error(`"${zone.slice(0, 60)}" is not a time zone. Use a name like Asia/Dubai or Europe/London.`);
+  return zone;
 }
 
 export function normalizeBusinessProfile(input = {}) {
@@ -111,13 +132,14 @@ export function normalizeBusinessProfile(input = {}) {
   if (!profile.location) profile.location = DEFAULT_BUSINESS_PROFILE.location;
   if (!profile.website) profile.website = DEFAULT_BUSINESS_PROFILE.website;
   if (!profile.services) profile.services = DEFAULT_BUSINESS_PROFILE.services;
+  profile.timezone = normalizeTimeZone(source.timezone);
   return profile;
 }
 
 export async function getBusinessProfile() {
   if (!db) await initDB();
   const row = await db.get(
-    'SELECT company_name, location, website, services, about, website_knowledge, updated_at FROM business_profile WHERE id = 1'
+    'SELECT company_name, location, website, services, about, website_knowledge, timezone, updated_at FROM business_profile WHERE id = 1'
   );
   if (!row) return { ...DEFAULT_BUSINESS_PROFILE, updated_at: null };
   return { ...normalizeBusinessProfile(row), updated_at: row.updated_at };
@@ -128,8 +150,8 @@ export async function saveBusinessProfile(input) {
   const profile = normalizeBusinessProfile(input);
   await db.run(
     `INSERT INTO business_profile (
-       id, company_name, location, website, services, about, website_knowledge, updated_at
-     ) VALUES (1, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+       id, company_name, location, website, services, about, website_knowledge, timezone, updated_at
+     ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
      ON CONFLICT(id) DO UPDATE SET
        company_name=excluded.company_name,
        location=excluded.location,
@@ -137,6 +159,7 @@ export async function saveBusinessProfile(input) {
        services=excluded.services,
        about=excluded.about,
        website_knowledge=excluded.website_knowledge,
+       timezone=excluded.timezone,
        updated_at=CURRENT_TIMESTAMP`,
     [
       profile.company_name,
@@ -145,6 +168,7 @@ export async function saveBusinessProfile(input) {
       profile.services,
       profile.about,
       profile.website_knowledge,
+      profile.timezone,
     ]
   );
   return getBusinessProfile();

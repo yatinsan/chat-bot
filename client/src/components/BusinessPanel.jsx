@@ -2,7 +2,17 @@ import { useEffect, useState } from 'react';
 import { formatDateTime } from '../lib/format.js';
 
 const DEFAULT_COMPANY_NAME = 'Pixbit Solutions';
-const FIELDS = ['company_name', 'location', 'website', 'services', 'about', 'website_knowledge'];
+const FIELDS = ['company_name', 'location', 'timezone', 'website', 'services', 'about', 'website_knowledge'];
+const DEFAULT_TIMEZONE = 'Asia/Dubai';
+
+function timeZoneOptions() {
+  try {
+    return Intl.supportedValuesOf('timeZone');
+  } catch {
+    return [DEFAULT_TIMEZONE];
+  }
+}
+const TIME_ZONES = timeZoneOptions();
 
 function sameProfile(a, b) {
   return FIELDS.every((key) => (a?.[key] ?? '') === (b?.[key] ?? ''));
@@ -16,6 +26,7 @@ function Counter({ value, max }) {
 const EMPTY = {
   company_name: DEFAULT_COMPANY_NAME,
   location: '',
+  timezone: DEFAULT_TIMEZONE,
   website: '',
   services: '',
   about: '',
@@ -162,6 +173,20 @@ export default function BusinessPanel({ onSaved }) {
               onChange={(event) => setField('location', event.target.value)}
               maxLength={120}
             />
+          </label>
+          <label className="field">
+            <span>Time zone</span>
+            <input
+              value={profile.timezone}
+              onChange={(event) => setField('timezone', event.target.value)}
+              list="business-time-zones"
+              placeholder={DEFAULT_TIMEZONE}
+              maxLength={60}
+            />
+            <datalist id="business-time-zones">
+              {TIME_ZONES.map((zone) => <option key={zone} value={zone} />)}
+            </datalist>
+            <small className="form-note">Used for meeting times and for working out dates like "next Friday".</small>
           </label>
           <label className="field">
             <span>Website</span>
