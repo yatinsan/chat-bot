@@ -38,8 +38,22 @@ function meetingClock(meeting) {
 
 export default function MeetingsCalendar({ meetings, onDecided, onOpenChat }) {
   const today = new Date();
-  const [cursor, setCursor] = useState({ year: today.getFullYear(), month: today.getMonth() });
-  const [selected, setSelected] = useState(dayKey(today.getFullYear(), today.getMonth(), today.getDate()));
+  const todayKey = dayKey(today.getFullYear(), today.getMonth(), today.getDate());
+
+  // Start on today, unless this month is empty: then jump to the nearest meeting
+  // (the next upcoming one, or the latest past one) so it is not hidden.
+  const [start] = useState(() => {
+    const days = meetings
+      .filter((meeting) => meeting.preferred_at && meeting.status !== 'rejected')
+      .map(meetingDay)
+      .filter(Boolean)
+      .sort();
+    const thisMonth = todayKey.slice(0, 7);
+    if (days.length === 0 || days.some((day) => day.startsWith(thisMonth))) return todayKey;
+    return days.find((day) => day >= todayKey) || days[days.length - 1];
+  });
+  const [cursor, setCursor] = useState({ year: Number(start.slice(0, 4)), month: Number(start.slice(5, 7)) - 1 });
+  const [selected, setSelected] = useState(start);
 
   const { byDay, unscheduled } = useMemo(() => {
     const map = {};
@@ -64,7 +78,6 @@ export default function MeetingsCalendar({ meetings, onDecided, onOpenChat }) {
   for (let i = 0; i < first.getDay(); i += 1) cells.push(null);
   for (let d = 1; d <= daysInMonth; d += 1) cells.push(d);
 
-  const todayKey = dayKey(today.getFullYear(), today.getMonth(), today.getDate());
   const monthLabel = first.toLocaleString('en-US', { month: 'long', year: 'numeric' });
   const selectedMeetings = byDay[selected] || [];
 
