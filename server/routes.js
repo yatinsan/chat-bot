@@ -19,11 +19,21 @@ import { extractDocumentText, MAX_UPLOAD_BYTES } from './documents.js';
 import { scrapeWebsite } from './scraper.js';
 import { buildChatSummary, summaryPayload } from './summary.js';
 import { formatBusinessTime } from './time.js';
+import { synthesize } from './tts.js';
 
 // engine: the chat engine; askJson(prompt): the model call used for summaries;
 // knowledge: the RAG knowledge base (reindex, retrieve, status).
 export function createApiRouter({ engine, broadcast, askJson, knowledge }) {
   const router = express.Router();
+
+  router.post('/tts', async (req, res) => {
+    try {
+      const audio = await synthesize(req.body?.text);
+      res.type('audio/wav').send(audio);
+    } catch (error) {
+      res.status(502).json({ error: error.message });
+    }
+  });
 
   router.get('/enquiries', async (req, res) => {
     try {
