@@ -59,6 +59,7 @@
   font: inherit;
 }
 .meeting-open { justify-self: start; }
+a.btn { display: inline-block; text-decoration: none; }
 
 .bubble.team { border-color: var(--line-gold); }
 .bubble.team .team-label {

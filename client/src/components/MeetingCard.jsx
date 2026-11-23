@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { chatLabel, formatDateTime } from '../lib/format.js';
+import { googleCalendarUrl } from '../lib/calendar.js';
 
 export const STATUS_LABEL = {
   pending: 'Awaiting your decision',
@@ -97,6 +98,17 @@ export default function MeetingCard({ meeting, onDecided, onOpenChat }) {
             Cancel
           </button>
         </form>
+      )}
+
+      {meeting.status === 'confirmed' && (
+        <a
+          className="btn meeting-open"
+          href={googleCalendarUrl(meeting, chatLabel(meeting))}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Add to Google Calendar
+        </a>
       )}
 
       {onOpenChat && !(open && !suggesting) && (
