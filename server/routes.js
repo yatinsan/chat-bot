@@ -113,6 +113,21 @@ export function createApiRouter({ engine, broadcast, askJson }) {
     }
   });
 
+  // Take over a chat (paused: true) or turn the AI back on (paused: false).
+  router.patch('/chats/:chatId/ai', async (req, res) => {
+    try {
+      if (typeof req.body?.paused !== 'boolean') {
+        res.status(400).json({ error: 'paused must be true or false.' });
+        return;
+      }
+      const chatId = String(req.params.chatId);
+      const aiPaused = await engine.setAiPaused(chatId, req.body.paused);
+      res.json({ chat_id: chatId, ai_paused: aiPaused });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   router.get('/chats/:chatId/summary', async (req, res) => {
     try {
       res.json(await summaryPayload(String(req.params.chatId)));

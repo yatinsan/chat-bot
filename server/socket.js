@@ -21,6 +21,8 @@ export function handleSockets(wss, { engine, transport }) {
         const content = String(data.content || '').trim();
         if (!chatId || !content) return;
         try {
+          // Replying as the team takes the chat over, so the AI does not answer on top of it.
+          await engine.setAiPaused(chatId, true);
           await engine.sendTeamMessage(chatId, content);
         } catch (error) {
           sendTo(socket, { type: 'error', message: error.message });

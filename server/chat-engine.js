@@ -8,7 +8,9 @@ import {
   getChatHistory,
   getLead,
   getOpenMeetingForChat,
+  isAiPaused,
   saveMessage,
+  setAiPaused as storeAiPaused,
   updateMeetingRequest,
   upsertLead,
 } from '../database.js';
@@ -311,8 +313,33 @@ export function createChatEngine({ completeChat, transport, broadcast, fetchPage
     return chatHistories[chatId];
   }
 
+  // The team takes over (paused = true) or hands the chat back to the AI.
+  async function setAiPaused(rawChatId, paused) {
+    const chatId = String(rawChatId);
+    const aiPaused = await storeAiPaused(chatId, paused);
+    if (aiPaused && cancelTurn(chatId)) {
+      delete activeRequests[chatId];
+      setTyping(chatId, false);
+    }
+    broadcast({ type: 'ai_control', chatId, ai_paused: aiPaused });
+    return aiPaused;
+  }
+
   async function handleUserMessage(rawChatId, userMessage, channel) {
     const chatId = String(rawChatId);
+
+    // While the team handles the chat, the message is saved and shown, but the AI does not reply.
+    if (await isAiPaused(chatId)) {
+      if (cancelTurn(chatId)) {
+        delete activeRequests[chatId];
+        setTyping(chatId, false);
+      }
+      const history = await prepareHistory(chatId);
+      history.push({ role: 'user', content: userMessage });
+      const saved = await saveMessage(chatId, 'user', userMessage);
+      broadcast({ type: 'message', message: saved });
+      return;
+    }
 
     if (cancelTurn(chatId)) {
       console.log(`\n[System] Aborted AI response for chat ${chatId} due to new incoming message.`);
@@ -422,5 +449,5 @@ export function createChatEngine({ completeChat, transport, broadcast, fetchPage
     delete chatHistories[id];
   }
 
-  return { handleUserMessage, sendTeamMessage, createMeetingRequest, forgetChat, histories: chatHistories };
+  return { handleUserMessage, sendTeamMessage, setAiPaused, createMeetingRequest, forgetChat, histories: chatHistories };
 }

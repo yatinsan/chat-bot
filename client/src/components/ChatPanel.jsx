@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import ConversationList from './ConversationList.jsx';
 import MessageThread from './MessageThread.jsx';
+import AiControl from './AiControl.jsx';
 import { channelOf, chatLabel } from '../lib/format.js';
 
 export default function ChatPanel({ subscribe, send, status, initialChatId }) {
@@ -81,7 +82,7 @@ export default function ChatPanel({ subscribe, send, status, initialChatId }) {
     if (event.type === 'typing' && String(event.chatId) === String(selectedRef.current)) {
       setTyping(Boolean(event.active));
     }
-    if (event.type === 'lead') loadChats();
+    if (event.type === 'lead' || event.type === 'ai_control') loadChats();
     if (event.type === 'lead_deleted') {
       loadChats();
       if (String(event.chatId) === String(selectedRef.current)) {
@@ -140,6 +141,9 @@ export default function ChatPanel({ subscribe, send, status, initialChatId }) {
             <h2>{active ? chatLabel(active) : selectedId ? 'Conversation' : 'New website chat'}</h2>
             <p>{selectedId ? `${channelOf(selectedId)} · ${selectedId}` : 'Messages are saved to chat history'}</p>
           </div>
+          {active && (
+            <AiControl chatId={selectedId} paused={Boolean(active.ai_paused)} onChanged={loadChats} onError={setError} />
+          )}
         </header>
         {error && <p className="banner">{error}</p>}
         <MessageThread messages={messages} typing={typing} />
@@ -147,7 +151,11 @@ export default function ChatPanel({ subscribe, send, status, initialChatId }) {
           <textarea
             rows={2}
             value={draft}
-            placeholder={selectedId ? 'Reply as the team…' : 'Test the assistant as a new customer…'}
+            placeholder={!selectedId
+              ? 'Test the assistant as a new customer…'
+              : active?.ai_paused
+                ? 'Reply as the team…'
+                : 'Reply as the team… (sending takes over the chat from the AI)'}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey) {

@@ -254,3 +254,43 @@ test('rememberDeliveredBubbles keeps seen bubbles before the newer message', () 
   rememberDeliveredBubbles(history, ['Hello'], 2);
   assert.deepEqual(history.map((m) => m.content), ['s', 'first', 'Hello', 'second']);
 });
+
+test('while the team handles a chat, the AI stays quiet', async (t) => {
+  quietConsole(t);
+  const chatId = newChatId();
+  const { engine, calls, events } = setup([reply({ content: 'Hi!' }), reply({ content: 'Back again.' })]);
+
+  await engine.handleUserMessage(chatId, 'hello', 'web');
+  assert.equal(calls.length, 1);
+
+  assert.equal(await engine.setAiPaused(chatId, true), true);
+  assert.ok(events.some((e) => e.type === 'ai_control' && e.chatId === chatId && e.ai_paused === true));
+  await engine.handleUserMessage(chatId, 'are you a person?', 'web');
+  assert.equal(calls.length, 1, 'no AI call while paused');
+  assert.deepEqual((await getChatHistory(chatId)).map((m) => m.content), ['hello', 'Hi!', 'are you a person?']);
+
+  await engine.setAiPaused(chatId, false);
+  await engine.handleUserMessage(chatId, 'ok thanks', 'web');
+  assert.equal(calls.length, 2);
+  assert.ok(calls[1].some((m) => m.role === 'user' && m.content === 'are you a person?'), 'the AI sees what was said while paused');
+  assert.deepEqual(delivered(events, chatId), ['Hi!', 'Back again.']);
+});
+
+test('taking over cancels a reply that is still being written', async (t) => {
+  quietConsole(t);
+  const chatId = newChatId();
+  let started;
+  const running = new Promise((resolve) => { started = resolve; });
+  const { engine, events } = setup([
+    (_messages, request) => new Promise((resolve) => {
+      started();
+      request.abortController.signal.addEventListener('abort', () => resolve(reply({ tools: [toolCall('sendMessages', { messages: ['Too late'] })] })));
+    }),
+  ]);
+
+  const turn = engine.handleUserMessage(chatId, 'hi', 'web');
+  await running;
+  await engine.setAiPaused(chatId, true);
+  await turn;
+  assert.deepEqual(delivered(events, chatId), []);
+});

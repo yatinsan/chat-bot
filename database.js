@@ -81,6 +81,15 @@ export async function initDB(filename = process.env.DATABASE_PATH || './database
     )
   `);
 
+  // Per-chat switch: when ai_paused is 1 the team is handling the chat and the AI stays quiet.
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS chat_controls (
+      chat_id TEXT PRIMARY KEY,
+      ai_paused INTEGER NOT NULL DEFAULT 0,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
   console.log('📦 Database initialized (Iterative Leads & Chat History).');
 }
 
@@ -232,17 +241,36 @@ export function tagsFor(row) {
   if (Number(row.pending_meetings) > 0) tags.push('pending_approval');
   if (Number(row.confirmed_meetings) > 0) tags.push('meeting_confirmed');
   if (Number(row.lead_score) >= 7) tags.push('hot_lead');
+  if (Number(row.ai_paused) === 1) tags.push('ai_paused');
   return tags;
 }
 
 function withTags(row) {
-  return { ...row, tags: tagsFor(row) };
+  return { ...row, ai_paused: Number(row.ai_paused) === 1, tags: tagsFor(row) };
+}
+
+const AI_PAUSED_SQL = (chatExpr) => `COALESCE((SELECT c.ai_paused FROM chat_controls c WHERE c.chat_id = ${chatExpr}), 0) AS ai_paused`;
+
+export async function isAiPaused(chatId) {
+  if (!db) await initDB();
+  const row = await db.get('SELECT ai_paused FROM chat_controls WHERE chat_id = ?', [chatId.toString()]);
+  return Number(row?.ai_paused) === 1;
+}
+
+export async function setAiPaused(chatId, paused) {
+  if (!db) await initDB();
+  await db.run(
+    `INSERT INTO chat_controls (chat_id, ai_paused, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(chat_id) DO UPDATE SET ai_paused=excluded.ai_paused, updated_at=CURRENT_TIMESTAMP`,
+    [chatId.toString(), paused ? 1 : 0]
+  );
+  return isAiPaused(chatId);
 }
 
 export async function getEnquiries() {
   if (!db) await initDB();
   const rows = await db.all(
-    `SELECT l.*, ${MEETING_COUNTS_SQL('l.chat_id')} FROM leads l ORDER BY l.updated_at DESC`
+    `SELECT l.*, ${MEETING_COUNTS_SQL('l.chat_id')}, ${AI_PAUSED_SQL('l.chat_id')} FROM leads l ORDER BY l.updated_at DESC`
   );
   return rows.map(withTags);
 }
@@ -350,6 +378,7 @@ export async function deleteChat(chatId) {
     await db.run('DELETE FROM messages WHERE chat_id = ?', [id]);
     await db.run('DELETE FROM meetings WHERE chat_id = ?', [id]);
     await db.run('DELETE FROM leads WHERE chat_id = ?', [id]);
+    await db.run('DELETE FROM chat_controls WHERE chat_id = ?', [id]);
     await db.exec('COMMIT');
   } catch (error) {
     await db.exec('ROLLBACK');
@@ -389,6 +418,7 @@ export async function listChats() {
       l.score_reason,
       l.status,
       ${MEETING_COUNTS_SQL('chats.chat_id')},
+      ${AI_PAUSED_SQL('chats.chat_id')},
       chats.message_count,
       last.content AS last_message,
       last.role AS last_role,

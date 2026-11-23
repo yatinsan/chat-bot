@@ -3,6 +3,7 @@ export const TAG_LABELS = {
   pending_approval: 'Pending approval',
   meeting_confirmed: 'Meeting confirmed',
   hot_lead: 'Hot lead',
+  ai_paused: 'AI paused',
 };
 
 export function tagLabel(tag) {

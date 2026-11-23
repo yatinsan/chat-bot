@@ -4,6 +4,8 @@ import {
   createMeeting,
   decideMeeting,
   deleteChat,
+  isAiPaused,
+  setAiPaused,
   getBusinessProfile,
   getChatHistory,
   getChatSummary,
@@ -150,4 +152,20 @@ test('deleteChat removes messages, meetings and the lead', async () => {
   assert.equal(await getLead('chat-del'), undefined);
   assert.equal(await getMessageCount('chat-del'), 0);
   assert.equal((await listMeetings()).some((row) => row.chat_id === 'chat-del'), false);
+});
+
+test('the AI pause switch is stored per chat and shows as a tag', async () => {
+  await saveMessage('pause-1', 'user', 'hi');
+  assert.equal(await isAiPaused('pause-1'), false);
+  assert.equal(await setAiPaused('pause-1', true), true);
+  const chat = (await listChats()).find((row) => row.chat_id === 'pause-1');
+  assert.equal(chat.ai_paused, true);
+  assert.ok(chat.tags.includes('ai_paused'));
+
+  assert.equal(await setAiPaused('pause-1', false), false);
+  assert.equal((await listChats()).find((row) => row.chat_id === 'pause-1').ai_paused, false);
+
+  await setAiPaused('pause-1', true);
+  await deleteChat('pause-1');
+  assert.equal(await isAiPaused('pause-1'), false, 'deleting a chat clears the switch');
 });

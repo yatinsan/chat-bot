@@ -3,6 +3,7 @@ import ConversationList from './ConversationList.jsx';
 import MessageThread from './MessageThread.jsx';
 import TagChips from './TagChips.jsx';
 import ChatSummary from './ChatSummary.jsx';
+import AiControl from './AiControl.jsx';
 import StatusSelect from './StatusSelect.jsx';
 import { STATUS_LABEL as MEETING_STATUS_LABEL } from './MeetingCard.jsx';
 import { channelOf, chatLabel, contactHref, formatDateTime, scoreBand } from '../lib/format.js';
@@ -80,7 +81,7 @@ export default function InboxPanel({ subscribe, onGoToMeetings }) {
       setSelectedId(null);
       setMessages([]);
     }
-    if (event.type === 'message' || event.type === 'lead' || event.type === 'lead_deleted' || event.type === 'meeting') load();
+    if (event.type === 'message' || event.type === 'lead' || event.type === 'lead_deleted' || event.type === 'meeting' || event.type === 'ai_control') load();
     if (event.type === 'message' && String(event.message.chat_id) === String(selectedId)) {
       setMessages((prev) => (
         prev.some((message) => message.id === event.message.id) ? prev : [...prev, event.message]
@@ -115,6 +116,9 @@ export default function InboxPanel({ subscribe, onGoToMeetings }) {
                 : 'Website and Telegram chats show up here.'}
             </p>
           </div>
+          {active && (
+            <AiControl chatId={active.chat_id} paused={Boolean(active.ai_paused)} onChanged={load} onError={setError} />
+          )}
         </header>
         {error && <p className="banner">{error}</p>}
         {selectedId && <ChatSummary chatId={selectedId} messageCount={messages.length} />}

@@ -731,3 +731,10 @@ button { cursor: pointer; }
     max-height: 240px;
   }
 }
+
+/* Who is answering a chat: the AI or the team. */
+.ai-control { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.ai-state { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; white-space: nowrap; }
+.ai-dot { width: 8px; height: 8px; border-radius: 50%; background: #34d399; box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.18); }
+.ai-control.paused .ai-state { color: #93c5fd; }
+.ai-control.paused .ai-dot { background: #60a5fa; box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.18); }
