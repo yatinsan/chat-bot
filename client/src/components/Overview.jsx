@@ -52,7 +52,7 @@ export default function Overview({ subscribe, onOpenChat }) {
           <h2>Recent conversations</h2>
         </header>
         {chats.length === 0 ? (
-          <p className="empty-inline">No chats yet. Start one from Live Chat.</p>
+          <p className="empty-inline">No chats yet. Try the assistant from Test chat.</p>
         ) : (
           <ul className="recent-list">
             {chats.map((chat) => (

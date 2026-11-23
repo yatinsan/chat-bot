@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Sidebar from './components/Sidebar.jsx';
 import Overview from './components/Overview.jsx';
-import ChatPanel from './components/ChatPanel.jsx';
-import HistoryPanel from './components/HistoryPanel.jsx';
 import LeadsPanel from './components/LeadsPanel.jsx';
-import InboxPanel from './components/InboxPanel.jsx';
+import ConversationsPanel from './components/ConversationsPanel.jsx';
+import VisitorChat from './components/VisitorChat.jsx';
 import BusinessPanel from './components/BusinessPanel.jsx';
 import MeetingsPanel from './components/MeetingsPanel.jsx';
 import { useWebSocket } from './hooks/useWebSocket.js';
@@ -12,18 +11,17 @@ import './meetings.css';
 import './summary.css';
 
 const TITLES = {
-  inbox: ['Inbox', 'Each chat, what they need, and who to contact'],
+  conversations: ['Conversations', 'Every website and Telegram chat: read, reply, or take over from the AI'],
   meetings: ['Meetings', 'Call requests from customers, waiting for your decision'],
   overview: ['Overview', 'Leads, conversations, and live activity'],
-  chat: ['Live Chat', 'Reply to a customer as the team, or test the assistant in a new chat'],
-  history: ['Chat History', 'Every saved website and Telegram conversation'],
   leads: ['Leads', 'Profiles the assistant has collected'],
   business: ['Business', 'Company facts the assistant can use'],
+  test: ['Test chat', 'Talk to the assistant exactly as a customer would'],
 };
 
 export default function App() {
   const listeners = useRef(new Set());
-  const [section, setSection] = useState('inbox');
+  const [section, setSection] = useState('conversations');
   const [focusChatId, setFocusChatId] = useState(null);
   const [companyName, setCompanyName] = useState('Pixbit Solutions');
 
@@ -68,7 +66,7 @@ export default function App() {
 
   function openChat(chatId) {
     setFocusChatId(chatId);
-    setSection('chat');
+    setSection('conversations');
   }
 
   const [title, subtitle] = TITLES[section];
@@ -94,20 +92,25 @@ export default function App() {
           </div>
         </header>
         <main className="content">
-          {section === 'inbox' && <InboxPanel subscribe={subscribe} onGoToMeetings={() => setSection('meetings')} />}
-          {section === 'meetings' && <MeetingsPanel subscribe={subscribe} onOpenChat={openChat} />}
-          {section === 'overview' && <Overview subscribe={subscribe} onOpenChat={openChat} />}
-          {section === 'chat' && (
-            <ChatPanel
+          {section === 'conversations' && (
+            <ConversationsPanel
               subscribe={subscribe}
               send={send}
               status={status}
               initialChatId={focusChatId}
+              onGoToMeetings={() => setSection('meetings')}
             />
           )}
-          {section === 'history' && <HistoryPanel subscribe={subscribe} onOpenChat={openChat} />}
+          {section === 'meetings' && <MeetingsPanel subscribe={subscribe} onOpenChat={openChat} />}
+          {section === 'overview' && <Overview subscribe={subscribe} onOpenChat={openChat} />}
           {section === 'leads' && <LeadsPanel subscribe={subscribe} onOpenChat={openChat} />}
           {section === 'business' && <BusinessPanel onSaved={(profile) => setCompanyName(profile.company_name)} />}
+          {section === 'test' && (
+            <section className="test-chat">
+              <VisitorChat test />
+              <p className="form-note">This is the chat window your customers see. Test chats show up in Conversations, marked Test.</p>
+            </section>
+          )}
         </main>
       </div>
     </div>

@@ -483,6 +483,12 @@ button { cursor: pointer; }
 }
 
 .visitor .thread { padding-top: 18px; }
+
+/* The customer chat window shown inside the dashboard's Test chat page. */
+.test-chat { height: 100%; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+.test-chat .form-note { text-align: center; }
+.visitor-page.embedded { flex: 1; min-height: 0; padding: 0; border-radius: 24px; }
+.visitor-page.embedded .visitor { height: 100%; max-height: 760px; width: min(440px, 100%); }
 .visitor .banner { margin-top: 12px; }
 
 .split.inbox { grid-template-columns: 280px minmax(0, 1fr) 280px; }

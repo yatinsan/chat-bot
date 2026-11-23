@@ -1,11 +1,10 @@
 const ITEMS = [
-  { id: 'inbox', label: 'Inbox', icon: 'inbox' },
+  { id: 'conversations', label: 'Conversations', icon: 'inbox' },
   { id: 'meetings', label: 'Meetings', icon: 'calendar' },
   { id: 'overview', label: 'Overview', icon: 'grid' },
-  { id: 'chat', label: 'Live Chat', icon: 'chat' },
-  { id: 'history', label: 'History', icon: 'clock' },
   { id: 'leads', label: 'Leads', icon: 'users' },
   { id: 'business', label: 'Business', icon: 'business' },
+  { id: 'test', label: 'Test chat', icon: 'chat' },
 ];
 
 function Icon({ name }) {
@@ -39,14 +38,6 @@ function Icon({ name }) {
     return (
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path d="M5 6.5A2.5 2.5 0 0 1 7.5 4h9A2.5 2.5 0 0 1 19 6.5v7A2.5 2.5 0 0 1 16.5 16H12l-4.2 3.2c-.7.5-1.8 0-1.8-.9V16H7.5A2.5 2.5 0 0 1 5 13.5v-7Z" />
-      </svg>
-    );
-  }
-  if (name === 'clock') {
-    return (
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <circle cx="12" cy="12" r="8" />
-        <path d="M12 8v4.5l3 1.5" />
       </svg>
     );
   }

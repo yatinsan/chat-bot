@@ -22,13 +22,19 @@ export function formatDateTime(value) {
   });
 }
 
+export function isTestChat(chatId) {
+  return String(chatId || '').startsWith('web-test-');
+}
+
 export function chatLabel(chat) {
   if (chat?.name && chat.name !== 'Anonymous') return chat.name;
+  if (isTestChat(chat?.chat_id)) return 'Test chat';
   if (String(chat?.chat_id || '').startsWith('web-')) return 'Website chat';
   return `Telegram ${chat?.chat_id ?? ''}`;
 }
 
 export function channelOf(chatId) {
+  if (isTestChat(chatId)) return 'Test';
   return String(chatId || '').startsWith('web-') ? 'Web' : 'Telegram';
 }
 

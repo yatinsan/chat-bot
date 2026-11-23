@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import ConversationList from './ConversationList.jsx';
 import MessageThread from './MessageThread.jsx';
 import TagChips from './TagChips.jsx';
@@ -17,12 +17,25 @@ function sortChats(chats) {
   });
 }
 
-export default function InboxPanel({ subscribe, onGoToMeetings }) {
+// One place for every chat: read it, reply as the team, take it over from the AI,
+// and see what the customer needs.
+export default function ConversationsPanel({ subscribe, send, status, initialChatId, onGoToMeetings }) {
   const [chats, setChats] = useState([]);
   const [leads, setLeads] = useState([]);
   const [meetings, setMeetings] = useState([]);
-  const [selectedId, setSelectedId] = useState(null);
+  const [selectedId, setSelectedIdState] = useState(initialChatId || null);
   const [messages, setMessages] = useState([]);
+  const [draft, setDraft] = useState('');
+  const [typing, setTyping] = useState(false);
+  const selectedRef = useRef(initialChatId || null);
+
+  const setSelectedId = useCallback((next) => {
+    setSelectedIdState((current) => {
+      const value = typeof next === 'function' ? next(current) : next;
+      selectedRef.current = value;
+      return value;
+    });
+  }, []);
   const [query, setQuery] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -51,13 +64,19 @@ export default function InboxPanel({ subscribe, onGoToMeetings }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [setSelectedId]);
 
   useEffect(() => {
     load();
   }, [load]);
 
   useEffect(() => {
+    if (initialChatId) setSelectedId(initialChatId);
+  }, [initialChatId, setSelectedId]);
+
+  useEffect(() => {
+    setTyping(false);
+    setDraft('');
     if (!selectedId) {
       setMessages([]);
       return undefined;
@@ -77,17 +96,33 @@ export default function InboxPanel({ subscribe, onGoToMeetings }) {
   }, [selectedId]);
 
   useEffect(() => subscribe((event) => {
-    if (event.type === 'lead_deleted' && String(event.chatId) === String(selectedId)) {
+    const current = String(selectedRef.current);
+    if (event.type === 'lead_deleted' && String(event.chatId) === current) {
       setSelectedId(null);
       setMessages([]);
     }
-    if (event.type === 'message' || event.type === 'lead' || event.type === 'lead_deleted' || event.type === 'meeting' || event.type === 'ai_control') load();
-    if (event.type === 'message' && String(event.message.chat_id) === String(selectedId)) {
+    if (['message', 'lead', 'lead_deleted', 'meeting', 'ai_control'].includes(event.type)) load();
+    if (event.type === 'message' && String(event.message.chat_id) === current) {
       setMessages((prev) => (
         prev.some((message) => message.id === event.message.id) ? prev : [...prev, event.message]
       ));
     }
-  }), [subscribe, load, selectedId]);
+    if (event.type === 'typing' && String(event.chatId) === current) setTyping(Boolean(event.active));
+    if (event.type === 'error') setError(event.message);
+  }), [subscribe, load, setSelectedId]);
+
+  function reply(event) {
+    event.preventDefault();
+    const content = draft.trim();
+    if (!content || !selectedId) return;
+    if (status !== 'online') {
+      setError('Not connected. Wait a second, then send again.');
+      return;
+    }
+    setDraft('');
+    setError('');
+    send({ type: 'admin_reply', chatId: selectedId, content });
+  }
 
   const active = chats.find((chat) => String(chat.chat_id) === String(selectedId));
   const leadRow = leads.find((item) => String(item.chat_id) === String(selectedId));
@@ -113,7 +148,7 @@ export default function InboxPanel({ subscribe, onGoToMeetings }) {
             <p>
               {active
                 ? `${channelOf(active.chat_id)} · ${active.message_count} messages · ${formatDateTime(active.last_at)}`
-                : 'Website and Telegram chats show up here.'}
+                : 'Website, Telegram and test chats show up here.'}
             </p>
           </div>
           {active && (
@@ -123,8 +158,27 @@ export default function InboxPanel({ subscribe, onGoToMeetings }) {
         {error && <p className="banner">{error}</p>}
         {selectedId && <ChatSummary chatId={selectedId} messageCount={messages.length} />}
         {selectedId
-          ? <MessageThread messages={messages} />
+          ? <MessageThread messages={messages} typing={typing} />
           : <div className="thread empty-thread"><p>Pick a conversation.</p></div>}
+        {selectedId && (
+          <form className="composer" onSubmit={reply}>
+            <textarea
+              rows={2}
+              value={draft}
+              placeholder={active?.ai_paused ? 'Reply as the team…' : 'Reply as the team… (sending takes over the chat from the AI)'}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault();
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }}
+            />
+            <button type="submit" className="btn primary" disabled={!draft.trim() || status !== 'online'}>
+              Send
+            </button>
+          </form>
+        )}
       </div>
       <aside className="requirement">
         <header className="panel-head">

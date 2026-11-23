@@ -2,10 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import MessageThread from './MessageThread.jsx';
 import { useWebSocket } from '../hooks/useWebSocket.js';
 
-const STORAGE_KEY = 'pixbit-chat-id';
-
-export default function VisitorChat() {
-  const [chatId, setChatId] = useState(() => localStorage.getItem(STORAGE_KEY) || '');
+// The chat window customers see. In test mode (the dashboard's Test chat page) it keeps
+// its own chat, and the chat id starts with "web-test-" so the team can tell it apart.
+export default function VisitorChat({ test = false }) {
+  const STORAGE_KEY = test ? 'pixbit-test-chat-id' : 'pixbit-chat-id';
+  const ID_PREFIX = test ? 'web-test-' : 'web-';
+  const [chatId, setChatId] = useState(() => {
+    try { return localStorage.getItem(STORAGE_KEY) || ''; } catch { return ''; }
+  });
   const [messages, setMessages] = useState([]);
   const [draft, setDraft] = useState('');
   const [typing, setTyping] = useState(false);
@@ -52,8 +56,8 @@ export default function VisitorChat() {
   }, []);
 
   useEffect(() => {
-    document.title = companyName;
-  }, [companyName]);
+    if (!test) document.title = companyName;
+  }, [companyName, test]);
 
   useEffect(() => {
     chatRef.current = chatId;
@@ -98,7 +102,7 @@ export default function VisitorChat() {
       return;
     }
 
-    const id = chatId || `web-${crypto.randomUUID()}`;
+    const id = chatId || `${ID_PREFIX}${crypto.randomUUID()}`;
     if (!chatId) {
       chatRef.current = id;
       setChatId(id);
@@ -120,7 +124,7 @@ export default function VisitorChat() {
   const showWelcome = messages.length === 0 && !typing;
 
   return (
-    <div className="visitor-page">
+    <div className={test ? 'visitor-page embedded' : 'visitor-page'}>
     <div className="visitor">
       <header className="visitor-head">
         <div className="brand">
