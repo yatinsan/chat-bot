@@ -178,8 +178,9 @@ export function createChatEngine({ completeChat, transport, broadcast, fetchPage
     return saved;
   }
 
-  // Saves a meeting the customer proposed. A pending request for the same chat is
-  // updated in place, so a changed time does not create a duplicate.
+  // Saves a meeting the customer proposed. The chat's active meeting (pending, countered or
+  // confirmed) is moved to the new time and goes back to pending for team approval, so a
+  // reschedule replaces the old meeting instead of leaving a second one.
   async function createMeetingRequest(chatId, args = {}) {
     const timezone = profileTimeZone(await loadProfile());
     const preferredText = String(args.preferred_text || '').replace(/\s+/g, ' ').trim().slice(0, 200);

@@ -349,7 +349,7 @@ export async function getMeeting(id) {
 export async function getOpenMeetingForChat(chatId) {
   if (!db) await initDB();
   return db.get(
-    "SELECT * FROM meetings WHERE chat_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1",
+    "SELECT * FROM meetings WHERE chat_id = ? AND status IN ('pending', 'countered', 'confirmed') ORDER BY id DESC LIMIT 1",
     [chatId.toString()]
   );
 }
@@ -357,7 +357,7 @@ export async function getOpenMeetingForChat(chatId) {
 export async function updateMeetingRequest(id, fields) {
   if (!db) await initDB();
   await db.run(
-    'UPDATE meetings SET preferred_text = ?, preferred_at = ?, timezone = ?, note = COALESCE(?, note) WHERE id = ?',
+    "UPDATE meetings SET preferred_text = ?, preferred_at = ?, timezone = ?, note = COALESCE(?, note), status = 'pending', proposed_text = NULL, decided_at = NULL WHERE id = ?",
     [fields.preferred_text, fields.preferred_at ?? null, fields.timezone ?? null, fields.note ?? null, Number(id)]
   );
   return getMeeting(id);
