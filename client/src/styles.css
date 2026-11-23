@@ -693,6 +693,32 @@ button { cursor: pointer; }
   border-radius: 0 0 20px 20px;
 }
 .dirty-note { color: #fbbf24; font-size: 13px; }
+
+/* Knowledge mode (full text or RAG). */
+.knowledge-mode { border: 0; padding: 0; margin: 0; min-width: 0; }
+.knowledge-mode legend { padding: 0; margin-bottom: 8px; color: var(--muted); font-size: 13px; }
+.segmented { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.segmented label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel-2);
+  cursor: pointer;
+}
+.segmented label:hover { border-color: var(--line-gold); }
+.segmented label.active { border-color: var(--line-strong); background: var(--gold-dim); }
+.segmented label:focus-within { outline: 2px solid var(--gold); outline-offset: 2px; }
+.segmented input { position: absolute; opacity: 0; pointer-events: none; }
+.segmented strong { font-size: 14px; }
+.segmented small { color: var(--muted); font-size: 12px; line-height: 1.4; }
+.rag-search { display: flex; flex-direction: column; gap: 8px; }
+.rag-error { color: #fbbf24; font-size: 12px; }
+.rag-results { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.rag-results li { padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-2); }
+.rag-results p { margin: 4px 0 0; font-size: 13px; line-height: 1.45; white-space: pre-wrap; }
 .saved-note { color: var(--muted); font-size: 13px; }
 
 @media (max-width: 720px) {
@@ -718,6 +744,7 @@ button { cursor: pointer; }
   .chat-pane { min-height: 70vh; }
   .content, .topbar { padding-left: 16px; padding-right: 16px; }
   .website-row { flex-direction: column; align-items: stretch; }
+  .segmented { grid-template-columns: 1fr; }
   .sidebar .brand strong { max-width: 120px; }
 }
 
@@ -744,3 +771,7 @@ button { cursor: pointer; }
 .ai-dot { width: 8px; height: 8px; border-radius: 50%; background: #34d399; box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.18); }
 .ai-control.paused .ai-state { color: #93c5fd; }
 .ai-control.paused .ai-dot { background: #60a5fa; box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.18); }
+
+.upload-row { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.upload-row .btn { cursor: pointer; }
+.upload-row .btn.disabled { opacity: 0.6; pointer-events: none; }

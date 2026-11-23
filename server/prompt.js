@@ -6,17 +6,30 @@ export function isUntouchedProfile(profile) {
   return Object.keys(DEFAULT_BUSINESS_PROFILE).every((key) => profile[key] === DEFAULT_BUSINESS_PROFILE[key]);
 }
 
-function businessFacts(profile) {
+// In RAG mode `retrieved` holds the knowledge chunks that matched the latest
+// customer message; otherwise the whole website knowledge goes in.
+function businessFacts(profile, retrieved) {
   const about = profile.about.trim();
-  const knowledge = profile.website_knowledge.trim();
-  if (!about && !knowledge) return '';
+  const rag = profile.knowledge_mode === 'rag';
+  const knowledge = rag ? '' : profile.website_knowledge.trim();
+  const chunks = rag ? (retrieved || []).map((chunk) => String(chunk.content || '').trim()).filter(Boolean) : [];
+  const hasKnowledgeBase = rag && profile.website_knowledge.trim();
+  if (!about && !knowledge && !hasKnowledgeBase) return '';
   const lines = ['', 'BUSINESS FACTS (private. Do not invent prices, clients, or claims that are not here):'];
   if (about) lines.push(`About: ${about}`);
   if (knowledge) lines.push('Website knowledge:', knowledge);
+  if (hasKnowledgeBase) {
+    if (chunks.length) {
+      lines.push('Relevant knowledge (searched from the knowledge base for the latest message; it may be incomplete):');
+      chunks.forEach((chunk, i) => lines.push(`[${i + 1}] ${chunk}`));
+    } else {
+      lines.push('Knowledge base: nothing matched the latest message. If they ask for a specific fact you do not have, say the team will confirm it.');
+    }
+  }
   return `\n${lines.join('\n')}\n`;
 }
 
-export function buildSystemPrompt(profile, now = new Date()) {
+export function buildSystemPrompt(profile, now = new Date(), { retrieved } = {}) {
   const timezone = isValidTimeZone(profile.timezone) ? profile.timezone : DEFAULT_TIMEZONE;
   const offset = utcOffset(timezone, now);
   const untouched = isUntouchedProfile(profile);
@@ -91,7 +104,7 @@ STOP:
 - Spam, insults, or job seekers get one short polite reply, a score of 1, and no more qualifying questions.
 - Never repeat the same information in consecutive messages. Do not ask for something already saved.
 `;
-  return `${prompt.replace(/\s*$/, '\n')}${businessFacts(profile)}`;
+  return `${prompt.replace(/\s*$/, '\n')}${businessFacts(profile, retrieved)}`;
 }
 
 export const AI_TOOLS = [

@@ -108,9 +108,10 @@ function profileTimeZone(profile) {
  *   transport: { hasTelegram, send(chatId, text, channel), startTyping(chatId, channel) -> stop() }
  *   broadcast(event)
  *   fetchPageText(url, signal) -> string
+ *   retrieveKnowledge(query, { signal }) -> [{ content }]  (RAG mode only; optional)
  *   delays: { minMs, maxMs, perCharMs, gapMs }
  */
-export function createChatEngine({ completeChat, transport, broadcast, fetchPageText, delays }) {
+export function createChatEngine({ completeChat, transport, broadcast, fetchPageText, retrieveKnowledge, delays }) {
   const chatHistories = {};
   const activeRequests = {};
 
@@ -287,9 +288,27 @@ export function createChatEngine({ completeChat, transport, broadcast, fetchPage
     return { error: `Unknown tool: ${fn.name}` };
   }
 
-  async function prepareHistory(chatId) {
+  // The search text for RAG: the new message plus the customer's previous one, for follow-ups like "how much is that?".
+  function ragQuery(chatId, userMessage) {
+    const previous = (chatHistories[chatId] || []).filter((message) => message.role === 'user').slice(-1);
+    return [...previous.map((message) => message.content), userMessage].filter(Boolean).join('\n');
+  }
+
+  async function findKnowledge(profile, chatId, userMessage, signal) {
+    if (profile.knowledge_mode !== 'rag' || !retrieveKnowledge || !userMessage) return [];
+    try {
+      return await retrieveKnowledge(ragQuery(chatId, userMessage), { signal });
+    } catch (error) {
+      // A newer message cancelled this turn; the message must still be saved, so carry on without knowledge.
+      if (!signal?.aborted) console.error('[RAG] Retrieval failed:', error.message);
+      return [];
+    }
+  }
+
+  async function prepareHistory(chatId, userMessage = '', signal) {
     const profile = await loadProfile();
-    const systemPrompt = buildSystemPrompt(profile);
+    const retrieved = await findKnowledge(profile, chatId, userMessage, signal);
+    const systemPrompt = buildSystemPrompt(profile, new Date(), { retrieved });
 
     if (!chatHistories[chatId]) {
       chatHistories[chatId] = [{ role: 'system', content: systemPrompt }];
@@ -347,7 +366,7 @@ export function createChatEngine({ completeChat, transport, broadcast, fetchPage
     const request = { aborted: false, abortController: new AbortController() };
     activeRequests[chatId] = request;
 
-    const history = await prepareHistory(chatId);
+    const history = await prepareHistory(chatId, userMessage, request.abortController.signal);
     history.push({ role: 'user', content: userMessage });
     const savedUser = await saveMessage(chatId, 'user', userMessage);
     broadcast({ type: 'message', message: savedUser });

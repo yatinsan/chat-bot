@@ -56,6 +56,21 @@ export async function initDB(filename = process.env.DATABASE_PATH || './database
   if (!profileColumns.has('timezone')) {
     await db.exec(`ALTER TABLE business_profile ADD COLUMN timezone TEXT NOT NULL DEFAULT '${DEFAULT_TIMEZONE}'`);
   }
+  if (!profileColumns.has('knowledge_mode')) {
+    await db.exec("ALTER TABLE business_profile ADD COLUMN knowledge_mode TEXT NOT NULL DEFAULT 'prompt'");
+  }
+
+  // RAG mode: the website knowledge split into chunks, each with an optional embedding (JSON array).
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS knowledge_chunks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      position INTEGER NOT NULL,
+      content TEXT NOT NULL,
+      embedding TEXT,
+      source_hash TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
 
   await db.exec(`
     CREATE TABLE IF NOT EXISTS meetings (
@@ -105,8 +120,12 @@ export const BUSINESS_LIMITS = {
   website: 300,
   services: 2000,
   about: 4000,
-  website_knowledge: 6000,
+  website_knowledge: 60000,
 };
+
+// 'prompt' puts all the knowledge in the system prompt; 'rag' searches it and sends only the relevant parts.
+export const KNOWLEDGE_MODES = ['prompt', 'rag'];
+export const KNOWLEDGE_LIMITS = { prompt: 6000, rag: 60000 };
 
 export const DEFAULT_BUSINESS_PROFILE = {
   company_name: 'Pixbit Solutions',
@@ -116,6 +135,7 @@ export const DEFAULT_BUSINESS_PROFILE = {
   about: '',
   website_knowledge: '',
   timezone: DEFAULT_TIMEZONE,
+  knowledge_mode: 'prompt',
 };
 
 function cleanProfileText(value, max) {
@@ -142,13 +162,15 @@ export function normalizeBusinessProfile(input = {}) {
   if (!profile.website) profile.website = DEFAULT_BUSINESS_PROFILE.website;
   if (!profile.services) profile.services = DEFAULT_BUSINESS_PROFILE.services;
   profile.timezone = normalizeTimeZone(source.timezone);
+  profile.knowledge_mode = KNOWLEDGE_MODES.includes(source.knowledge_mode) ? source.knowledge_mode : 'prompt';
+  profile.website_knowledge = profile.website_knowledge.slice(0, KNOWLEDGE_LIMITS[profile.knowledge_mode]).trim();
   return profile;
 }
 
 export async function getBusinessProfile() {
   if (!db) await initDB();
   const row = await db.get(
-    'SELECT company_name, location, website, services, about, website_knowledge, timezone, updated_at FROM business_profile WHERE id = 1'
+    'SELECT company_name, location, website, services, about, website_knowledge, timezone, knowledge_mode, updated_at FROM business_profile WHERE id = 1'
   );
   if (!row) return { ...DEFAULT_BUSINESS_PROFILE, updated_at: null };
   return { ...normalizeBusinessProfile(row), updated_at: row.updated_at };
@@ -159,8 +181,8 @@ export async function saveBusinessProfile(input) {
   const profile = normalizeBusinessProfile(input);
   await db.run(
     `INSERT INTO business_profile (
-       id, company_name, location, website, services, about, website_knowledge, timezone, updated_at
-     ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+       id, company_name, location, website, services, about, website_knowledge, timezone, knowledge_mode, updated_at
+     ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
      ON CONFLICT(id) DO UPDATE SET
        company_name=excluded.company_name,
        location=excluded.location,
@@ -169,6 +191,7 @@ export async function saveBusinessProfile(input) {
        about=excluded.about,
        website_knowledge=excluded.website_knowledge,
        timezone=excluded.timezone,
+       knowledge_mode=excluded.knowledge_mode,
        updated_at=CURRENT_TIMESTAMP`,
     [
       profile.company_name,
@@ -178,9 +201,42 @@ export async function saveBusinessProfile(input) {
       profile.about,
       profile.website_knowledge,
       profile.timezone,
+      profile.knowledge_mode,
     ]
   );
   return getBusinessProfile();
+}
+
+// Chunks currently indexed for RAG, in their original order.
+export async function getKnowledgeChunks() {
+  if (!db) await initDB();
+  const rows = await db.all('SELECT id, position, content, embedding, source_hash FROM knowledge_chunks ORDER BY position');
+  return rows.map((row) => {
+    let embedding = null;
+    if (row.embedding) {
+      try { embedding = JSON.parse(row.embedding); } catch { embedding = null; }
+    }
+    return { id: row.id, position: row.position, content: row.content, embedding, source_hash: row.source_hash };
+  });
+}
+
+// Replaces the whole index. chunks: [{ content, embedding? }]
+export async function replaceKnowledgeChunks(sourceHash, chunks) {
+  if (!db) await initDB();
+  await db.exec('BEGIN');
+  try {
+    await db.run('DELETE FROM knowledge_chunks');
+    for (const [position, chunk] of chunks.entries()) {
+      await db.run(
+        'INSERT INTO knowledge_chunks (position, content, embedding, source_hash) VALUES (?, ?, ?, ?)',
+        [position, chunk.content, chunk.embedding ? JSON.stringify(chunk.embedding) : null, sourceHash]
+      );
+    }
+    await db.exec('COMMIT');
+  } catch (error) {
+    await db.exec('ROLLBACK');
+    throw error;
+  }
 }
 
 export async function upsertLead(chatId, data) {

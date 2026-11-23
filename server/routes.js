@@ -15,12 +15,14 @@ import {
   saveBusinessProfile,
   setLeadStatus,
 } from '../database.js';
+import { extractDocumentText, MAX_UPLOAD_BYTES } from './documents.js';
 import { scrapeWebsite } from './scraper.js';
 import { buildChatSummary, summaryPayload } from './summary.js';
 import { formatBusinessTime } from './time.js';
 
-// engine: the chat engine; askJson(prompt): the model call used for summaries.
-export function createApiRouter({ engine, broadcast, askJson }) {
+// engine: the chat engine; askJson(prompt): the model call used for summaries;
+// knowledge: the RAG knowledge base (reindex, retrieve, status).
+export function createApiRouter({ engine, broadcast, askJson, knowledge }) {
   const router = express.Router();
 
   router.get('/enquiries', async (req, res) => {
@@ -57,9 +59,14 @@ export function createApiRouter({ engine, broadcast, askJson }) {
     }
   });
 
+  async function withIndex(profile, indexed) {
+    if (!knowledge) return profile;
+    return { ...profile, knowledge_index: indexed || await knowledge.status() };
+  }
+
   router.get('/settings', async (_req, res) => {
     try {
-      res.json(await getBusinessProfile());
+      res.json(await withIndex(await getBusinessProfile()));
     } catch (error) {
       res.status(500).json({ error: error.message });
     }
@@ -71,15 +78,61 @@ export function createApiRouter({ engine, broadcast, askJson }) {
         res.status(400).json({ error: 'Settings must be an object.' });
         return;
       }
-      res.json(await saveBusinessProfile(req.body));
+      const profile = await saveBusinessProfile(req.body);
+      let indexed;
+      if (knowledge) {
+        try {
+          indexed = await knowledge.reindex(profile);
+        } catch (error) {
+          indexed = { ...(await knowledge.status()), warning: `Saved, but the knowledge index failed: ${error.message}` };
+        }
+      }
+      res.json(await withIndex(profile, indexed));
     } catch (error) {
       res.status(400).json({ error: error.message });
     }
   });
 
+  // Rebuilds the RAG index (and its embeddings) from the saved knowledge.
+  router.post('/settings/knowledge/reindex', async (_req, res) => {
+    if (!knowledge) { res.status(404).json({ error: 'RAG is not available.' }); return; }
+    try {
+      const indexed = await knowledge.reindex(await getBusinessProfile(), { force: true });
+      res.json(indexed);
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Shows which knowledge chunks a customer message would pull in.
+  router.post('/settings/knowledge/search', async (req, res) => {
+    if (!knowledge) { res.status(404).json({ error: 'RAG is not available.' }); return; }
+    const query = String(req.body?.query || '').trim().slice(0, 500);
+    if (!query) { res.status(400).json({ error: 'Type a question to search for.' }); return; }
+    try {
+      res.json({ results: await knowledge.retrieve(query) });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Reads text out of an uploaded file (raw body, name in X-Filename). The text
+  // is returned for review; it is added to the knowledge when the user saves.
+  router.post('/settings/knowledge/extract', express.raw({ type: () => true, limit: MAX_UPLOAD_BYTES }), async (req, res) => {
+    try {
+      let filename = '';
+      try { filename = decodeURIComponent(String(req.get('x-filename') || '')); } catch { /* keep blank */ }
+      const text = await extractDocumentText(Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0), filename);
+      res.json({ filename, text, characters: text.length });
+    } catch (error) {
+      res.status(error.statusCode || (error.type === 'entity.too.large' ? 413 : 400))
+        .json({ error: error.type === 'entity.too.large' ? 'That file is too large (10 MB max).' : error.message });
+    }
+  });
+
   router.post('/settings/scrape', async (req, res) => {
     try {
-      const scraped = await scrapeWebsite(req.body?.url);
+      const scraped = await scrapeWebsite(req.body?.url, { mode: req.body?.mode });
       res.json(scraped);
     } catch (error) {
       const status = error.statusCode || 400;

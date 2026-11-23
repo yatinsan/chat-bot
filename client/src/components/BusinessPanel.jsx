@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { formatDateTime } from '../lib/format.js';
 
 const DEFAULT_COMPANY_NAME = 'Pixbit Solutions';
-const FIELDS = ['company_name', 'location', 'timezone', 'website', 'services', 'about', 'website_knowledge'];
+const FIELDS = ['company_name', 'location', 'timezone', 'website', 'services', 'about', 'knowledge_mode', 'website_knowledge'];
+const KNOWLEDGE_LIMITS = { prompt: 6000, rag: 60000 };
 const DEFAULT_TIMEZONE = 'Asia/Dubai';
 
 function timeZoneOptions() {
@@ -30,8 +31,76 @@ const EMPTY = {
   website: '',
   services: '',
   about: '',
+  knowledge_mode: 'prompt',
   website_knowledge: '',
 };
+
+function indexSummary(index) {
+  if (!index || !index.chunks) return 'Not indexed yet. Save to build the index.';
+  const kind = index.search === 'semantic' ? 'semantic search (embeddings)' : 'keyword search';
+  return `${index.chunks} chunk${index.chunks === 1 ? '' : 's'} indexed, using ${kind}.`;
+}
+
+function KnowledgeSearch({ disabled }) {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  async function search() {
+    if (!query.trim()) return;
+    setBusy(true);
+    setError('');
+    try {
+      const response = await fetch('/api/settings/knowledge/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Search failed.');
+      setResults(data.results || []);
+    } catch (err) {
+      setError(err.message);
+      setResults(null);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="rag-search">
+      <span className="field-label">Test retrieval</span>
+      <div className="website-row">
+        <input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); search(); } }}
+          placeholder="Ask what a customer might ask, e.g. Do you build Shopify stores?"
+          maxLength={500}
+          disabled={disabled}
+        />
+        <button type="button" className="btn" onClick={search} disabled={disabled || busy || !query.trim()}>
+          {busy ? 'Searching…' : 'Search'}
+        </button>
+      </div>
+      {disabled && <small className="form-note">Save your changes first. Search uses the saved knowledge.</small>}
+      {error && <small className="rag-error">{error}</small>}
+      {results && (
+        results.length ? (
+          <ol className="rag-results">
+            {results.map((result) => (
+              <li key={result.position}>
+                <small className="char-count">Match {Math.round(result.score * 100)}%</small>
+                <p>{result.content}</p>
+              </li>
+            ))}
+          </ol>
+        ) : <small className="form-note">Nothing matched. The assistant would say the team will confirm.</small>
+      )}
+    </div>
+  );
+}
 
 export default function BusinessPanel({ onSaved }) {
   const [profile, setProfile] = useState(null);
@@ -40,6 +109,7 @@ export default function BusinessPanel({ onSaved }) {
   const [notice, setNotice] = useState('');
   const [saving, setSaving] = useState(false);
   const [scraping, setScraping] = useState(false);
+  const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -81,7 +151,7 @@ export default function BusinessPanel({ onSaved }) {
       const response = await fetch('/api/settings/scrape', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url }),
+        body: JSON.stringify({ url, mode: profile.knowledge_mode }),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || 'Could not scrape that website.');
@@ -94,13 +164,45 @@ export default function BusinessPanel({ onSaved }) {
         return next;
       });
       const notes = ['Scraped the website. Review the details, then save.'];
-      if (data.trimmed) notes.push('The page text was shortened to 6,000 characters.');
+      if (data.trimmed) notes.push(`The page text was shortened to ${(data.limit || 6000).toLocaleString()} characters.`);
       if (data.warning) notes.push(data.warning);
       setNotice(notes.join(' '));
     } catch (err) {
       setError(err.message);
     } finally {
       setScraping(false);
+    }
+  }
+
+  async function uploadFile(event) {
+    const input = event.target;
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    setUploading(true);
+    setError('');
+    setNotice('');
+    try {
+      const response = await fetch('/api/settings/knowledge/extract', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream', 'X-Filename': encodeURIComponent(file.name) },
+        body: file,
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Could not read that file.');
+      const limit = KNOWLEDGE_LIMITS[profile.knowledge_mode] || KNOWLEDGE_LIMITS.prompt;
+      setProfile((current) => {
+        const existing = current.website_knowledge.trim();
+        const added = `${file.name}:\n${data.text}`;
+        return { ...current, website_knowledge: existing ? `${existing}\n\n${added}` : added };
+      });
+      const total = profile.website_knowledge.trim().length + data.characters;
+      setNotice(`Added ${data.characters.toLocaleString()} characters from ${file.name}. Review, then save.${
+        total > limit ? ` It is over the ${limit.toLocaleString()} character limit, so the end will be cut off on save.` : ''}`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setUploading(false);
     }
   }
 
@@ -122,9 +224,12 @@ export default function BusinessPanel({ onSaved }) {
       setProfile({ ...EMPTY, ...data });
       setSaved({ ...EMPTY, ...data });
       onSaved?.(data);
-      setNotice(shortened
-        ? 'Saved. Longer text was shortened so it fits in the assistant prompt.'
-        : 'Saved. The assistant uses these details on the next reply.');
+      const notes = [shortened
+        ? 'Saved. Longer text was shortened to fit the limit.'
+        : 'Saved. The assistant uses these details on the next reply.'];
+      if (data.knowledge_mode === 'rag') notes.push(indexSummary(data.knowledge_index));
+      if (data.knowledge_index?.warning) notes.push(data.knowledge_index.warning);
+      setNotice(notes.join(' '));
     } catch (err) {
       setError(err.message);
     } finally {
@@ -146,6 +251,9 @@ export default function BusinessPanel({ onSaved }) {
   }
 
   const dirty = !sameProfile(profile, saved);
+  const rag = profile.knowledge_mode === 'rag';
+  const knowledgeLimit = KNOWLEDGE_LIMITS[profile.knowledge_mode] || KNOWLEDGE_LIMITS.prompt;
+  const overLimit = profile.website_knowledge.length > knowledgeLimit;
 
   return (
     <section className="stack business-page">
@@ -221,17 +329,68 @@ export default function BusinessPanel({ onSaved }) {
               rows={4}
             />
           </label>
+          <fieldset className="field knowledge-mode">
+            <legend>How the assistant uses the knowledge</legend>
+            <div className="segmented" role="radiogroup">
+              <label className={!rag ? 'active' : ''}>
+                <input
+                  type="radio"
+                  name="knowledge_mode"
+                  value="prompt"
+                  checked={!rag}
+                  onChange={() => setField('knowledge_mode', 'prompt')}
+                />
+                <strong>Full text</strong>
+                <small>All of it goes in every prompt. Best for short knowledge, up to 6,000 characters.</small>
+              </label>
+              <label className={rag ? 'active' : ''}>
+                <input
+                  type="radio"
+                  name="knowledge_mode"
+                  value="rag"
+                  checked={rag}
+                  onChange={() => setField('knowledge_mode', 'rag')}
+                />
+                <strong>RAG (search)</strong>
+                <small>Split into chunks and searched. Only the parts that match the customer's message are sent. Up to 60,000 characters.</small>
+              </label>
+            </div>
+            {rag && <small className="form-note">{indexSummary(saved?.knowledge_mode === 'rag' ? saved.knowledge_index : null)}</small>}
+          </fieldset>
+          <div className="field upload-row">
+            <label className={`btn${uploading ? ' disabled' : ''}`}>
+              {uploading ? 'Reading file…' : 'Add file (PDF, TXT, MD, CSV)'}
+              <input
+                type="file"
+                accept=".pdf,.txt,.md,.markdown,.csv,.json,.html,.htm,application/pdf,text/*"
+                onChange={uploadFile}
+                disabled={uploading || saving}
+                hidden
+              />
+            </label>
+            <small className="form-note">The file's text is added to the knowledge below. Up to 10 MB. Scanned PDFs need OCR and are not supported.</small>
+          </div>
           <label className="field">
-            <span className="field-label">Website knowledge <Counter value={profile.website_knowledge} max={6000} /></span>
+            <span className="field-label">
+              {rag ? 'Knowledge base' : 'Website knowledge'} <Counter value={profile.website_knowledge} max={knowledgeLimit} />
+            </span>
             <textarea
               className="tall"
-              placeholder="Click Scrape website to pull text from your site, or paste facts here."
+              placeholder={rag
+                ? 'Paste FAQs, service details, policies, and website text. Blank lines separate topics.'
+                : 'Click Scrape website to pull text from your site, or paste facts here.'}
               value={profile.website_knowledge}
               onChange={(event) => setField('website_knowledge', event.target.value)}
-              maxLength={6000}
-              rows={8}
+              maxLength={KNOWLEDGE_LIMITS.rag}
+              rows={rag ? 14 : 8}
             />
+            {overLimit && (
+              <small className="rag-error">
+                Full text mode keeps the first {knowledgeLimit.toLocaleString()} characters. Switch to RAG to keep all of it.
+              </small>
+            )}
           </label>
+          {rag && <KnowledgeSearch disabled={dirty || saved?.knowledge_mode !== 'rag'} />}
           <div className="form-actions sticky-actions">
             <button type="submit" className="btn primary" disabled={saving || scraping || !dirty}>
               {saving ? 'Saving…' : 'Save'}

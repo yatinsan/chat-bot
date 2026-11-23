@@ -2,7 +2,7 @@
 import { isIP } from 'node:net';
 import { lookup } from 'node:dns/promises';
 import { load as loadHtml } from 'cheerio';
-import { BUSINESS_LIMITS } from '../database.js';
+import { BUSINESS_LIMITS, KNOWLEDGE_LIMITS } from '../database.js';
 
 const SCRAPE_TIMEOUT_MS = 12000;
 const SCRAPE_MAX_BYTES = 1_500_000;
@@ -212,7 +212,7 @@ async function renderPageHtml(target) {
   }
 }
 
-function knowledgeFromPage(extracted) {
+function knowledgeFromPage(extracted, limit) {
   const parts = [];
   if (extracted.title) parts.push(`Title: ${extracted.title}`);
   if (extracted.description) parts.push(`Description: ${extracted.description}`);
@@ -220,14 +220,15 @@ function knowledgeFromPage(extracted) {
   if (extracted.text) parts.push(extracted.text);
   let knowledge = parts.join('\n').trim();
   let trimmed = false;
-  if (knowledge.length > BUSINESS_LIMITS.website_knowledge) {
-    knowledge = knowledge.slice(0, BUSINESS_LIMITS.website_knowledge).trim();
+  if (knowledge.length > limit) {
+    knowledge = knowledge.slice(0, limit).trim();
     trimmed = true;
   }
   return { knowledge, trimmed };
 }
 
-export async function scrapeWebsite(rawUrl) {
+export async function scrapeWebsite(rawUrl, { mode } = {}) {
+  const limit = KNOWLEDGE_LIMITS[mode] || KNOWLEDGE_LIMITS.prompt;
   let value = String(rawUrl || '').trim();
   if (!value) {
     const error = new Error('Enter a website address.');
@@ -247,12 +248,12 @@ export async function scrapeWebsite(rawUrl) {
   }
 
   let extracted = html
-    ? extractPage(html, BUSINESS_LIMITS.website_knowledge)
+    ? extractPage(html, limit)
     : { title: '', siteName: '', description: '', headings: [], text: '' };
 
   if (extracted.text.length < SCRAPE_MIN_TEXT) {
     try {
-      const rendered = extractPage(await renderPageHtml(url), BUSINESS_LIMITS.website_knowledge);
+      const rendered = extractPage(await renderPageHtml(url), limit);
       if (rendered.text.length > extracted.text.length) extracted = rendered;
     } catch (error) {
       if (!extracted.text && !extracted.title && !extracted.description) {
@@ -262,7 +263,7 @@ export async function scrapeWebsite(rawUrl) {
     }
   }
 
-  const { knowledge, trimmed } = knowledgeFromPage(extracted);
+  const { knowledge, trimmed } = knowledgeFromPage(extracted, limit);
   if (!knowledge) {
     const error = new Error(fetchError?.message || 'No readable text was found on that page.');
     error.statusCode = 400;
@@ -274,6 +275,7 @@ export async function scrapeWebsite(rawUrl) {
     description: extracted.description,
     knowledge,
     trimmed,
+    limit,
     warning,
     suggested_name: suggestCompanyName(extracted),
     suggested_about: extracted.description.slice(0, BUSINESS_LIMITS.about),
