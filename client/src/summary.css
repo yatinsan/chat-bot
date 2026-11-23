@@ -4,8 +4,9 @@
   margin: 0 0 12px;
   padding: 12px 14px;
   border: 1px solid var(--line-gold);
+  border-left: 3px solid var(--gold);
   border-radius: 14px;
-  background: var(--gold-dim);
+  background: linear-gradient(180deg, var(--gold-dim), rgba(255, 214, 10, 0.04));
 }
 
 .chat-summary header {
@@ -22,7 +23,7 @@
 .chat-summary-row { display: grid; grid-template-columns: 110px 1fr; gap: 10px; font-size: 13px; }
 .chat-summary dt { color: var(--muted); }
 .chat-summary dd { margin: 0; color: var(--text); }
-.chat-summary-row.summary-missing dd { color: #fbbf24; }
+.chat-summary-row.summary-missing dd { color: var(--gold); }
 
 @media (max-width: 560px) {
   .chat-summary-row { grid-template-columns: 1fr; gap: 2px; }
