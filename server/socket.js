@@ -2,10 +2,12 @@
 import { randomUUID } from 'crypto';
 import { channelFor } from './channels.js';
 import { sendTo } from './realtime.js';
+import { endCallsFor, setCall } from './calls.js';
 
 export function handleSockets(wss, { engine, transport }) {
   wss.on('connection', (socket) => {
     sendTo(socket, { type: 'connected' });
+    socket.on('close', () => endCallsFor(socket));
 
     socket.on('message', async (raw) => {
       let data;
@@ -27,6 +29,13 @@ export function handleSockets(wss, { engine, transport }) {
         } catch (error) {
           sendTo(socket, { type: 'error', message: error.message });
         }
+        return;
+      }
+
+      // The visitor started or ended a live voice call on this chat.
+      if (data.type === 'call') {
+        const chatId = String(data.chatId || '');
+        if (chatId) setCall(chatId, socket, Boolean(data.active));
         return;
       }
 

@@ -36,7 +36,7 @@ export default function ConversationList({ chats, selectedId, onSelect, query, o
             onClick={() => onSelect(chat.chat_id)}
           >
             <div className="conv-row">
-              <strong>{chatLabel(chat)}</strong>
+              <strong>{chatLabel(chat)}{chat.in_call && <span className="call-badge">In call</span>}</strong>
               <span>{formatDateTime(chat.last_at)}</span>
             </div>
             <p>{chat.last_message || 'No messages yet'}</p>

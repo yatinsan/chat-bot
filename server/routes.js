@@ -20,6 +20,7 @@ import { scrapeWebsite } from './scraper.js';
 import { buildChatSummary, summaryPayload } from './summary.js';
 import { formatBusinessTime } from './time.js';
 import { synthesize } from './tts.js';
+import { isInCall } from './calls.js';
 
 // engine: the chat engine; askJson(prompt): the model call used for summaries;
 // knowledge: the RAG knowledge base (reindex, retrieve, status).
@@ -55,7 +56,7 @@ export function createApiRouter({ engine, broadcast, askJson, knowledge }) {
 
   router.get('/chats', async (req, res) => {
     try {
-      res.json(await listChats());
+      res.json((await listChats()).map((chat) => ({ ...chat, in_call: isInCall(chat.chat_id) })));
     } catch (error) {
       res.status(500).json({ error: error.message });
     }

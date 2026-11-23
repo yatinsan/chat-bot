@@ -13,7 +13,7 @@ function Bubble({ message }) {
       <SpeechPlayer speech={speech} />
       <div className="bubble-foot">
         <time>{formatTime(message.created_at)}</time>
-        <SpeakButton speech={speech} />
+        {!mine && <SpeakButton speech={speech} />}
       </div>
     </article>
   );

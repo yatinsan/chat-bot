@@ -101,7 +101,7 @@ export default function ConversationsPanel({ subscribe, send, status, initialCha
       setSelectedId(null);
       setMessages([]);
     }
-    if (['message', 'lead', 'lead_deleted', 'meeting', 'ai_control'].includes(event.type)) load();
+    if (['message', 'lead', 'lead_deleted', 'meeting', 'ai_control', 'call'].includes(event.type)) load();
     if (event.type === 'message' && String(event.message.chat_id) === current) {
       setMessages((prev) => (
         prev.some((message) => message.id === event.message.id) ? prev : [...prev, event.message]
@@ -144,7 +144,7 @@ export default function ConversationsPanel({ subscribe, send, status, initialCha
       <div className="chat-pane">
         <header className="chat-head">
           <div>
-            <h2>{active ? chatLabel(active) : 'Select a chat'}</h2>
+            <h2>{active ? chatLabel(active) : 'Select a chat'}{active?.in_call && <span className="call-badge">In call</span>}</h2>
             <p>
               {active
                 ? `${channelOf(active.chat_id)} · ${active.message_count} messages · ${formatDateTime(active.last_at)}`

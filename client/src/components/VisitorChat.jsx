@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import MessageThread from './MessageThread.jsx';
+import CallBar from './CallBar.jsx';
 import { useWebSocket } from '../hooks/useWebSocket.js';
+import { callSupported, useCall } from '../hooks/useCall.js';
 
 // The chat window customers see. In test mode (the dashboard's Test chat page) it keeps
 // its own chat, and the chat id starts with "web-test-" so the team can tell it apart.
@@ -96,18 +98,23 @@ export default function VisitorChat({ test = false }) {
     setError('');
   }
 
+  // The chat id for this conversation, creating one if this is the very first message or call.
+  function ensureChatId() {
+    if (chatRef.current) return chatRef.current;
+    const id = `${ID_PREFIX}${crypto.randomUUID()}`;
+    chatRef.current = id;
+    setChatId(id);
+    localStorage.setItem(STORAGE_KEY, id);
+    return id;
+  }
+
   function sendContent(content) {
     if (status !== 'online') {
       setError('Still connecting. Try again in a second.');
       return;
     }
 
-    const id = chatId || `${ID_PREFIX}${crypto.randomUUID()}`;
-    if (!chatId) {
-      chatRef.current = id;
-      setChatId(id);
-      localStorage.setItem(STORAGE_KEY, id);
-    }
+    const id = ensureChatId();
     setDraft('');
     setError('');
     send({ type: 'send', chatId: id, content });
@@ -120,6 +127,8 @@ export default function VisitorChat({ test = false }) {
     sendContent(content);
   }
 
+  const call = useCall({ messages, typing, online: status === 'online', sendContent, ensureChatId, wsSend: send });
+
   const presence = status === 'online' ? 'Online' : status === 'connecting' ? 'Connecting…' : 'Reconnecting…';
   const showWelcome = messages.length === 0 && !typing;
 
@@ -131,12 +140,20 @@ export default function VisitorChat({ test = false }) {
           <span className="brand-mark">{mark}</span>
           <div>
             <strong>{companyName}</strong>
-            <small>{presence}</small>
+            <small>{call.active ? 'In call' : presence}</small>
           </div>
         </div>
-        <button type="button" className="btn" onClick={startNew}>New chat</button>
+        <div className="visitor-actions">
+          {callSupported && !call.active && (
+            <button type="button" className="btn call-start" onClick={call.start} disabled={status !== 'online'} aria-label="Start voice call" title="Start voice call">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><path d="M6.6 10.8a15 15 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.6a1 1 0 0 1-.25 1z" /></svg>
+              Call
+            </button>
+          )}
+          <button type="button" className="btn" onClick={startNew} disabled={call.active}>New chat</button>
+        </div>
       </header>
-      {error && <p className="banner">{error}</p>}
+      {(error || call.error) && <p className="banner">{error || call.error}</p>}
       {showWelcome ? (
         <div className="visitor-welcome">
           <span className="brand-mark">{mark}</span>
@@ -149,6 +166,7 @@ export default function VisitorChat({ test = false }) {
       ) : (
         <MessageThread messages={messages} typing={typing} />
       )}
+      {call.active ? <CallBar call={call} /> : (
       <form className="composer" onSubmit={submit}>
         <textarea
           rows={2}
@@ -166,6 +184,7 @@ export default function VisitorChat({ test = false }) {
           Send
         </button>
       </form>
+      )}
     </div>
     </div>
   );
