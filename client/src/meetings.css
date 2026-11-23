@@ -73,3 +73,33 @@ a.btn { display: inline-block; text-decoration: none; }
 }
 
 .meeting-suggest input:focus { border-color: var(--line-strong); box-shadow: var(--gold-glow); }
+
+/* List / Calendar switch and month grid */
+.view-toggle { display: inline-flex; flex-shrink: 0; align-self: flex-start; justify-self: start; border: 1px solid var(--line-2); border-radius: 10px; overflow: hidden; }
+.view-toggle button { background: transparent; color: var(--muted); border: 0; padding: 8px 16px; font: inherit; font-weight: 600; cursor: pointer; }
+.view-toggle button.active { background: var(--gold); color: var(--gold-ink); }
+
+.cal-head { align-items: center; }
+.cal-nav { display: flex; gap: 6px; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; padding: 4px 8px; }
+.cal-weekdays span { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); text-align: center; }
+.cal-cell {
+  min-height: 84px; display: flex; flex-direction: column; gap: 3px; align-items: stretch; text-align: left;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 6px;
+  color: var(--text); font: inherit; cursor: pointer; overflow: hidden;
+}
+.cal-cell:hover { border-color: var(--line-gold); }
+.cal-blank { background: transparent; border-color: transparent; cursor: default; }
+.cal-today .cal-day { color: var(--gold); font-weight: 700; }
+.cal-selected { border-color: var(--line-strong); box-shadow: var(--gold-glow); }
+.cal-day { font-size: 12px; }
+.cal-chip { font-size: 10.5px; line-height: 1.3; border-radius: 6px; padding: 2px 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: var(--panel-3); }
+.cal-chip-pending, .cal-chip-countered { background: var(--gold-dim-2); color: #fbbf24; }
+.cal-chip-confirmed { background: rgba(34, 197, 94, 0.15); color: #86efac; }
+.cal-chip-rejected { color: var(--muted); text-decoration: line-through; }
+.cal-more { font-size: 10.5px; color: var(--muted); }
+
+@media (max-width: 640px) {
+  .cal-cell { min-height: 56px; padding: 4px; }
+  .cal-chip { display: none; }
+}

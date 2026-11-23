@@ -1,10 +1,19 @@
 import { useCallback, useEffect, useState } from 'react';
 import MeetingCard from './MeetingCard.jsx';
+import MeetingsCalendar from './MeetingsCalendar.jsx';
 
 export default function MeetingsPanel({ subscribe, onOpenChat }) {
   const [meetings, setMeetings] = useState([]);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [view, setView] = useState(() => {
+    try { return localStorage.getItem('meetings-view') === 'calendar' ? 'calendar' : 'list'; } catch { return 'list'; }
+  });
+
+  function changeView(next) {
+    setView(next);
+    try { localStorage.setItem('meetings-view', next); } catch { /* ignore */ }
+  }
 
   const load = useCallback(async () => {
     try {
@@ -36,6 +45,16 @@ export default function MeetingsPanel({ subscribe, onOpenChat }) {
       {error && <p className="banner">{error}</p>}
       {loading && <p className="empty-inline">Loading meeting requests…</p>}
 
+      <div className="view-toggle" role="tablist" aria-label="Meetings view">
+        <button type="button" role="tab" aria-selected={view === 'list'} className={view === 'list' ? 'active' : ''} onClick={() => changeView('list')}>List</button>
+        <button type="button" role="tab" aria-selected={view === 'calendar'} className={view === 'calendar' ? 'active' : ''} onClick={() => changeView('calendar')}>Calendar</button>
+      </div>
+
+      {view === 'calendar' && !loading && (
+        <MeetingsCalendar meetings={meetings} onDecided={load} onOpenChat={onOpenChat} />
+      )}
+
+      {view === 'list' && <>
       <article className="panel">
         <header className="panel-head">
           <h2>Waiting for you</h2>
@@ -63,6 +82,7 @@ export default function MeetingsPanel({ subscribe, onOpenChat }) {
           </div>
         </article>
       )}
+      </>}
     </section>
   );
 }
