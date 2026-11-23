@@ -30,7 +30,10 @@ export function parseToolArguments(raw) {
 // Keeps the system prompt plus the latest messages.
 export function recentMessages(messages) {
   if (messages.length <= MAX_HISTORY_LENGTH + 1) return messages;
-  return [messages[0], ...messages.slice(-MAX_HISTORY_LENGTH)];
+  const recent = messages.slice(-MAX_HISTORY_LENGTH);
+  // Never start on a tool result or tool call whose partner was cut off: Gemini rejects that.
+  const firstUser = recent.findIndex((message) => message.role === 'user');
+  return [messages[0], ...(firstUser === -1 ? recent.slice(-1) : recent.slice(firstUser))];
 }
 
 export function toGeminiMessages(messages) {
