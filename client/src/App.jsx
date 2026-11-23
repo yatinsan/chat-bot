@@ -49,7 +49,20 @@ export default function App() {
     return () => listeners.current.delete(listener);
   }, []);
 
+  const [pendingMeetings, setPendingMeetings] = useState(0);
+  const loadBadges = useCallback(() => {
+    fetch('/api/stats')
+      .then((response) => response.json())
+      .then((data) => setPendingMeetings(Number(data?.pending_meetings) || 0))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    loadBadges();
+  }, [loadBadges]);
+
   const { status, send } = useWebSocket((event) => {
+    if (event.type === 'meeting' || event.type === 'lead_deleted') loadBadges();
     listeners.current.forEach((listener) => listener(event));
   });
 
@@ -62,7 +75,13 @@ export default function App() {
 
   return (
     <div className="app">
-      <Sidebar section={section} onSection={setSection} status={status} companyName={companyName} />
+      <Sidebar
+        section={section}
+        onSection={setSection}
+        status={status}
+        companyName={companyName}
+        badges={{ meetings: pendingMeetings }}
+      />
       <div className="workspace">
         <header className="topbar">
           <div>
@@ -75,7 +94,7 @@ export default function App() {
           </div>
         </header>
         <main className="content">
-          {section === 'inbox' && <InboxPanel subscribe={subscribe} />}
+          {section === 'inbox' && <InboxPanel subscribe={subscribe} onGoToMeetings={() => setSection('meetings')} />}
           {section === 'meetings' && <MeetingsPanel subscribe={subscribe} onOpenChat={openChat} />}
           {section === 'overview' && <Overview subscribe={subscribe} onOpenChat={openChat} />}
           {section === 'chat' && (

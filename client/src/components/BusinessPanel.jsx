@@ -1,6 +1,17 @@
 import { useEffect, useState } from 'react';
+import { formatDateTime } from '../lib/format.js';
 
 const DEFAULT_COMPANY_NAME = 'Pixbit Solutions';
+const FIELDS = ['company_name', 'location', 'website', 'services', 'about', 'website_knowledge'];
+
+function sameProfile(a, b) {
+  return FIELDS.every((key) => (a?.[key] ?? '') === (b?.[key] ?? ''));
+}
+
+function Counter({ value, max }) {
+  const length = value.length;
+  return <small className={length > max * 0.9 ? 'char-count near' : 'char-count'}>{length.toLocaleString()} / {max.toLocaleString()}</small>;
+}
 
 const EMPTY = {
   company_name: DEFAULT_COMPANY_NAME,
@@ -13,6 +24,7 @@ const EMPTY = {
 
 export default function BusinessPanel({ onSaved }) {
   const [profile, setProfile] = useState(null);
+  const [saved, setSaved] = useState(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [saving, setSaving] = useState(false);
@@ -27,7 +39,10 @@ export default function BusinessPanel({ onSaved }) {
         return data;
       })
       .then((data) => {
-        if (!cancelled) setProfile({ ...EMPTY, ...data });
+        if (!cancelled) {
+          setProfile({ ...EMPTY, ...data });
+          setSaved({ ...EMPTY, ...data });
+        }
       })
       .catch((err) => {
         if (!cancelled) setError(err.message);
@@ -94,6 +109,7 @@ export default function BusinessPanel({ onSaved }) {
       const shortened = profile.website_knowledge.length > (data.website_knowledge || '').length
         || profile.about.length > (data.about || '').length;
       setProfile({ ...EMPTY, ...data });
+      setSaved({ ...EMPTY, ...data });
       onSaved?.(data);
       setNotice(shortened
         ? 'Saved. Longer text was shortened so it fits in the assistant prompt.'
@@ -117,6 +133,8 @@ export default function BusinessPanel({ onSaved }) {
       </section>
     );
   }
+
+  const dirty = !sameProfile(profile, saved);
 
   return (
     <section className="stack business-page">
@@ -160,7 +178,7 @@ export default function BusinessPanel({ onSaved }) {
             </div>
           </label>
           <label className="field">
-            <span>What you offer</span>
+            <span className="field-label">What you offer <Counter value={profile.services} max={2000} /></span>
             <textarea
               value={profile.services}
               onChange={(event) => setField('services', event.target.value)}
@@ -169,8 +187,9 @@ export default function BusinessPanel({ onSaved }) {
             />
           </label>
           <label className="field">
-            <span>About</span>
+            <span className="field-label">About <Counter value={profile.about} max={4000} /></span>
             <textarea
+              placeholder="A few lines on who you are. Scrape website can fill this in."
               value={profile.about}
               onChange={(event) => setField('about', event.target.value)}
               maxLength={4000}
@@ -178,19 +197,32 @@ export default function BusinessPanel({ onSaved }) {
             />
           </label>
           <label className="field">
-            <span>Website knowledge</span>
+            <span className="field-label">Website knowledge <Counter value={profile.website_knowledge} max={6000} /></span>
             <textarea
               className="tall"
+              placeholder="Click Scrape website to pull text from your site, or paste facts here."
               value={profile.website_knowledge}
               onChange={(event) => setField('website_knowledge', event.target.value)}
               maxLength={6000}
               rows={8}
             />
           </label>
-          <div className="form-actions">
-            <button type="submit" className="btn primary" disabled={saving || scraping}>
+          <div className="form-actions sticky-actions">
+            <button type="submit" className="btn primary" disabled={saving || scraping || !dirty}>
               {saving ? 'Saving…' : 'Save'}
             </button>
+            {dirty ? (
+              <>
+                <span className="dirty-note">Unsaved changes</span>
+                <button type="button" className="btn ghost" disabled={saving} onClick={() => setProfile({ ...saved })}>
+                  Discard
+                </button>
+              </>
+            ) : (
+              <span className="saved-note">
+                {saved?.updated_at ? `Saved ${formatDateTime(saved.updated_at)}` : 'Using default details'}
+              </span>
+            )}
           </div>
         </form>
       </article>

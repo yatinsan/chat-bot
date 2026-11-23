@@ -69,7 +69,7 @@ function Icon({ name }) {
   );
 }
 
-export default function Sidebar({ section, onSection, status, companyName }) {
+export default function Sidebar({ section, onSection, status, companyName, badges = {} }) {
   const name = companyName?.trim() || 'Pixbit Solutions';
   const mark = name.charAt(0).toUpperCase() || 'P';
   return (
@@ -91,6 +91,9 @@ export default function Sidebar({ section, onSection, status, companyName }) {
           >
             <Icon name={item.icon} />
             {item.label}
+            {badges[item.id] > 0 && (
+              <span className="nav-badge" aria-label={`${badges[item.id]} waiting`}>{badges[item.id]}</span>
+            )}
           </button>
         ))}
       </nav>

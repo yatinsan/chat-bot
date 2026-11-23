@@ -26,6 +26,7 @@ export async function initDB() {
   if (!names.has('stack')) await db.exec('ALTER TABLE leads ADD COLUMN stack TEXT');
   if (!names.has('lead_score')) await db.exec('ALTER TABLE leads ADD COLUMN lead_score INTEGER');
   if (!names.has('score_reason')) await db.exec('ALTER TABLE leads ADD COLUMN score_reason TEXT');
+  if (!names.has('status')) await db.exec("ALTER TABLE leads ADD COLUMN status TEXT NOT NULL DEFAULT 'new'");
 
   await db.exec(`
     CREATE TABLE IF NOT EXISTS messages (
@@ -116,10 +117,10 @@ export function normalizeBusinessProfile(input = {}) {
 export async function getBusinessProfile() {
   if (!db) await initDB();
   const row = await db.get(
-    'SELECT company_name, location, website, services, about, website_knowledge FROM business_profile WHERE id = 1'
+    'SELECT company_name, location, website, services, about, website_knowledge, updated_at FROM business_profile WHERE id = 1'
   );
-  if (!row) return { ...DEFAULT_BUSINESS_PROFILE };
-  return normalizeBusinessProfile(row);
+  if (!row) return { ...DEFAULT_BUSINESS_PROFILE, updated_at: null };
+  return { ...normalizeBusinessProfile(row), updated_at: row.updated_at };
 }
 
 export async function saveBusinessProfile(input) {
@@ -146,7 +147,7 @@ export async function saveBusinessProfile(input) {
       profile.website_knowledge,
     ]
   );
-  return profile;
+  return getBusinessProfile();
 }
 
 export async function upsertLead(chatId, data) {
@@ -289,6 +290,29 @@ export async function listMeetings() {
   return rows.map((row) => ({ ...row, conflict: Boolean(row.conflict) }));
 }
 
+// Sales pipeline stage, set by the team. New leads start at 'new'.
+export const LEAD_STATUSES = ['new', 'contacted', 'meeting', 'won', 'lost'];
+
+export async function setLeadStatus(chatId, status) {
+  if (!db) await initDB();
+  if (!LEAD_STATUSES.includes(status)) throw new Error(`status must be one of: ${LEAD_STATUSES.join(', ')}.`);
+  const result = await db.run(
+    'UPDATE leads SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE chat_id = ?',
+    [status, chatId.toString()]
+  );
+  if (!result.changes) return null;
+  return getLead(chatId);
+}
+
+// Move a lead forward to 'meeting' when a call is confirmed, but never backwards from won/lost.
+export async function promoteLeadToMeeting(chatId) {
+  if (!db) await initDB();
+  await db.run(
+    "UPDATE leads SET status = 'meeting' WHERE chat_id = ? AND status IN ('new', 'contacted')",
+    [chatId.toString()]
+  );
+}
+
 export async function getLead(chatId) {
   if (!db) await initDB();
   return await db.get('SELECT * FROM leads WHERE chat_id = ?', [chatId.toString()]);
@@ -339,6 +363,7 @@ export async function listChats() {
       l.meeting_time,
       l.lead_score,
       l.score_reason,
+      l.status,
       ${MEETING_COUNTS_SQL('chats.chat_id')},
       chats.message_count,
       last.content AS last_message,

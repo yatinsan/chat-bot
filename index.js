@@ -9,7 +9,7 @@ import TelegramBot from 'node-telegram-bot-api';
 import dotenv from 'dotenv';
 import express from 'express';
 import { load as loadHtml } from 'cheerio';
-import { initDB, upsertLead, getEnquiries, saveMessage, getChatHistory, getLead, listChats, getStats, deleteChat, getBusinessProfile, saveBusinessProfile, DEFAULT_BUSINESS_PROFILE, BUSINESS_LIMITS, createMeeting, getMeeting, getOpenMeetingForChat, updateMeetingRequest, decideMeeting, listMeetings, getMessageCount, getChatSummary, saveChatSummary } from './database.js';
+import { initDB, upsertLead, getEnquiries, saveMessage, getChatHistory, getLead, listChats, getStats, deleteChat, getBusinessProfile, saveBusinessProfile, DEFAULT_BUSINESS_PROFILE, BUSINESS_LIMITS, createMeeting, getMeeting, getOpenMeetingForChat, updateMeetingRequest, decideMeeting, listMeetings, getMessageCount, getChatSummary, saveChatSummary, setLeadStatus, promoteLeadToMeeting } from './database.js';
 
 // Meetings are proposed in the customer's local time. One zone for the whole business.
 const BUSINESS_TZ = 'Asia/Dubai';
@@ -240,6 +240,20 @@ app.delete('/api/leads/:chatId', async (req, res) => {
   }
 });
 
+app.patch('/api/leads/:chatId/status', async (req, res) => {
+  try {
+    const lead = await setLeadStatus(String(req.params.chatId), String(req.body?.status || ''));
+    if (!lead) {
+      res.status(404).json({ error: 'Lead not found.' });
+      return;
+    }
+    broadcast({ type: 'lead', lead });
+    res.json(lead);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 // Conversation summary for the team. Uses only what the chat says; anything else is "Not mentioned yet".
 const SUMMARY_MAX_MESSAGES = 60;
 const SUMMARY_EMPTY = 'Not mentioned yet';
@@ -380,6 +394,7 @@ app.post('/api/meetings/:id/decision', async (req, res) => {
 
     await sendTeamMessage(meeting.chat_id, text);
     await decideMeeting(meeting.id, status, proposed);
+    if (status === 'confirmed') await promoteLeadToMeeting(meeting.chat_id);
     const updated = await getMeeting(meeting.id);
     broadcast({ type: 'meeting', meeting: updated });
     const lead = await getLead(meeting.chat_id);

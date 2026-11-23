@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { chatLabel, formatDateTime } from '../lib/format.js';
 
-const STATUS_LABEL = {
+export const STATUS_LABEL = {
   pending: 'Awaiting your decision',
   countered: 'Waiting for their reply',
   confirmed: 'Confirmed',
@@ -68,6 +68,11 @@ export default function MeetingCard({ meeting, onDecided, onOpenChat }) {
           <button type="button" className="btn danger" disabled={busy} onClick={() => decide('reject')}>
             Reject
           </button>
+          {onOpenChat && (
+            <button type="button" className="btn ghost" onClick={() => onOpenChat(meeting.chat_id)}>
+              Open chat
+            </button>
+          )}
         </div>
       )}
 
@@ -94,7 +99,7 @@ export default function MeetingCard({ meeting, onDecided, onOpenChat }) {
         </form>
       )}
 
-      {onOpenChat && (
+      {onOpenChat && !(open && !suggesting) && (
         <button type="button" className="btn meeting-open" onClick={() => onOpenChat(meeting.chat_id)}>
           Open chat
         </button>

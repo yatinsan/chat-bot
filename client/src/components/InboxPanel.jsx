@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import ConversationList from './ConversationList.jsx';
 import MessageThread from './MessageThread.jsx';
-import MeetingCard from './MeetingCard.jsx';
 import TagChips from './TagChips.jsx';
 import ChatSummary from './ChatSummary.jsx';
+import StatusSelect from './StatusSelect.jsx';
+import { STATUS_LABEL as MEETING_STATUS_LABEL } from './MeetingCard.jsx';
 import { channelOf, chatLabel, contactHref, formatDateTime, scoreBand } from '../lib/format.js';
 
 function sortChats(chats) {
@@ -15,7 +16,7 @@ function sortChats(chats) {
   });
 }
 
-export default function InboxPanel({ subscribe }) {
+export default function InboxPanel({ subscribe, onGoToMeetings }) {
   const [chats, setChats] = useState([]);
   const [leads, setLeads] = useState([]);
   const [meetings, setMeetings] = useState([]);
@@ -88,7 +89,8 @@ export default function InboxPanel({ subscribe }) {
   }), [subscribe, load, selectedId]);
 
   const active = chats.find((chat) => String(chat.chat_id) === String(selectedId));
-  const lead = leads.find((item) => String(item.chat_id) === String(selectedId)) || active;
+  const leadRow = leads.find((item) => String(item.chat_id) === String(selectedId));
+  const lead = leadRow || active;
   const score = Number(lead?.lead_score) || 0;
   const contact = contactHref(lead?.contact);
   const chatMeetings = meetings.filter((meeting) => String(meeting.chat_id) === String(selectedId));
@@ -129,6 +131,12 @@ export default function InboxPanel({ subscribe }) {
           <p className="empty-inline">Select a chat to see the brief.</p>
         ) : (
           <div className="requirement-body">
+            {leadRow && (
+              <div className="requirement-status">
+                <span>Stage</span>
+                <StatusSelect lead={leadRow} onChanged={load} />
+              </div>
+            )}
             <TagChips tags={lead?.tags} />
             {score > 0 ? (
               <p className="score-reason">{lead?.score_reason || 'Scored from the conversation.'}</p>
@@ -143,22 +151,38 @@ export default function InboxPanel({ subscribe }) {
             <p className="notes">{lead?.insights || 'No notes yet.'}</p>
             {chatMeetings.length > 0 && (
               <>
-                <h3>Meeting requests</h3>
+                <h3>Meeting</h3>
                 {chatMeetings.map((meeting) => (
-                  <MeetingCard key={meeting.id} meeting={meeting} onDecided={load} />
+                  <div key={meeting.id} className="meeting-mini">
+                    <span className={`meeting-status meeting-${meeting.status}`}>
+                      {MEETING_STATUS_LABEL[meeting.status] || meeting.status}
+                    </span>
+                    <p>{meeting.preferred_text}</p>
+                    {meeting.status === 'countered' && meeting.proposed_text && (
+                      <p className="meeting-meta">You suggested: {meeting.proposed_text}</p>
+                    )}
+                  </div>
                 ))}
+                {chatMeetings.some((meeting) => meeting.status === 'pending') && (
+                  <button type="button" className="btn" onClick={onGoToMeetings}>
+                    Review in Meetings
+                  </button>
+                )}
               </>
             )}
-            <h3>Contact</h3>
+          </div>
+        )}
+        {selectedId && (
+          <footer className="requirement-foot">
             {contact ? (
               <>
                 <p className="contact">{contact.display}</p>
                 <a className="btn primary" href={contact.href}>{contact.label}</a>
               </>
             ) : (
-              <p className="empty-inline">No phone or email yet.</p>
+              <p className="score-reason">No phone or email yet.</p>
             )}
-          </div>
+          </footer>
         )}
       </aside>
     </section>
